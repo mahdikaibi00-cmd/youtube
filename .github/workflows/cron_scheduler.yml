@@ -2,46 +2,42 @@ name: Automated Random Cron Scheduler
 
 on:
   schedule:
-    # Run every hour exactly on the hour
-    - cron: '0 * * * *'
+    - cron: '0 0 * * *'
+    - cron: '0 14 * * *'
   workflow_dispatch:
+    inputs:
+      force_channel:
+        description: 'Force dispatch a specific channel'
+        required: false
+        type: choice
+        options:
+          - ""
+          - "Grid Hardened"
+          - "Brew-Fi"
 
 jobs:
-  scheduler:
+  dispatch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install System Dependencies
-        run: sudo apt-get update && sudo apt-get install rclone jq curl wget -y
-
-      - name: Install Python Dependencies
-        run: python -m pip install requests
-
-      - name: Configure rclone Silently
-        env:
-          DATA_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
-          CLIENT_ID: ${{ secrets.CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      - name: Determine Channel
+        id: channel
         run: |
-          mkdir -p ~/.config/rclone
-          
-          # Data Token
-          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
-          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
-          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
-          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
-          
-          cat << EOF > ~/.config/rclone/rclone.conf
-          [data]
-          type = drive
-          client_id = $CLIENT_ID
-          client_secret = $CLIENT_SECRET
-          scope = drive
-          token = $DATA_TOKEN
-          EOF
-          
-      - name: Run Intelligent Auto-Scheduler
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-        run: python .github/scripts/auto_scheduler.py
+          FORCE="${{ inputs.force_channel }}"
+          if [ -n "$FORCE" ]; then
+            echo "channel=$FORCE" >> $GITHUB_OUTPUT
+          else
+            CRON="${{ github.event.schedule }}"
+            if [ "$CRON" = "0 0 * * *" ]; then
+              echo "channel=Grid Hardened" >> $GITHUB_OUTPUT
+            else
+              echo "channel=Brew-Fi" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Trigger Pipeline
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/render.yml/dispatches \
+            -d '{"ref":"main","inputs":{"action_type":"CREATE_AUTOMATIC","channel_name":"${{ steps.channel.outputs.channel }}","topic":""}}'
