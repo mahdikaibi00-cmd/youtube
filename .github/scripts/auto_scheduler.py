@@ -84,8 +84,17 @@ def trigger_workflow(channel, topic):
         print(f"Failed to trigger workflow: {resp.status_code} {resp.text}")
 
 def main():
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     hour = now.hour
+    
+    force_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    if force_run:
+        print("Manual dispatch detected. Triggering all channels.")
+        for ch in ["Grid Hardened", "Brew-Fi"]:
+            topic = pop_topic(ch)
+            if topic:
+                trigger_pipeline(ch, topic)
+        return
     
     channel = None
     prob = 0

@@ -141,10 +141,10 @@ jobs:
               break
             fi
             # Ping Ollama through the tunnel every 60s to keep localhost.run HTTP routing alive
-            # SSH keepalive alone is not enough — localhost.run also drops the HTTP route on inactivity
+            # SSH keepalive alone is not enough â€” localhost.run also drops the HTTP route on inactivity
             PING_COUNTER=$((PING_COUNTER + 1))
             if [ $((PING_COUNTER % 4)) -eq 0 ]; then
-              curl -sf -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" --max-time 10 "$OLLAMA_URL/api/tags" > /dev/null 2>&1 && echo "[keep-warm] Tunnel ping OK" || echo "[keep-warm] Tunnel ping failed — will retry"
+              curl -sf -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" --max-time 10 "$OLLAMA_URL/api/tags" > /dev/null 2>&1 && echo "[keep-warm] Tunnel ping OK" || echo "[keep-warm] Tunnel ping failed â€” will retry"
             fi
             sleep 15
           done
@@ -373,7 +373,7 @@ jobs:
         run: |
           VAULT="${{ needs.creation_job.outputs.vault_name }}"
           CHANNEL="${{ inputs.channel_name }}"
-          # Only download what tts_worker.py actually needs — no mp4s, no bulk folders
+          # Only download what tts_worker.py actually needs â€” no mp4s, no bulk folders
           rclone copy "engine:Colab_AutoVideoCreator" . \
             --include "tts_worker.py" \
             --include "local_voice_engine.py" \
@@ -407,10 +407,10 @@ jobs:
           rclone copy "public/channels/${{ inputs.channel_name }}/$VAULT" "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" --include "*.wav" -v
 
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # PHASE 2a: brain_prep_job — Audio processing + scene alignment + timeline save
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # PHASE 2a: brain_prep_job â€” Audio processing + scene alignment + timeline save
   # Does NOT download clips. Hands off to download_matrix workers.
-  # ─────────────────────────────────────────────────────────────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   brain_prep_job:
     needs: [creation_job, tts_matrix]
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
@@ -545,11 +545,11 @@ jobs:
           rclone copy "public/channels/${{ inputs.channel_name }}/$VAULT" "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" --transfers 16 -v || true
           rclone copy "channels/${{ inputs.channel_name }}/to upload/$VAULT" "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/$VAULT" --transfers 16 -v || true
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # PHASE 2b: ollama_pool — 8 dedicated Ollama servers, one per download worker
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # PHASE 2b: ollama_pool â€” 8 dedicated Ollama servers, one per download worker
   # Starts after tts_matrix (so tts's 15 slots are freed before these 8 boot)
   # Each registers its URL to Drive and waits for its shutdown signal.
-  # ─────────────────────────────────────────────────────────────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   ollama_pool:
     needs: [tts_matrix]
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
@@ -632,7 +632,7 @@ jobs:
           rclone copyto ollama_url.txt "$POOL_DIR/worker_${WORKER_ID}.txt"
           echo "[Ollama Pool Worker $WORKER_ID] Live at $OLLAMA_URL"
 
-          # Keep alive — wait for shutdown signal from download_worker
+          # Keep alive â€” wait for shutdown signal from download_worker
           PING_COUNTER=0
           while true; do
             if rclone lsf "$POOL_DIR/shutdown_${WORKER_ID}.txt" > /dev/null 2>&1; then
@@ -650,11 +650,11 @@ jobs:
             sleep 15
           done
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # PHASE 2c: download_matrix — 8 parallel footage downloaders
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # PHASE 2c: download_matrix â€” 8 parallel footage downloaders
   # Each worker uses its dedicated ollama_pool Ollama server.
   # Fires after brain_prep_job has saved the aligned timeline to Drive.
-  # ─────────────────────────────────────────────────────────────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   download_matrix:
     needs: [creation_job, brain_prep_job]
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
@@ -778,9 +778,9 @@ jobs:
             echo "[!] No partial timeline file found for worker ${{ matrix.worker }}."
           fi
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # PHASE 2d: brain_finish_job — Merge partials, overlay, audio master, git push
-  # ─────────────────────────────────────────────────────────────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # PHASE 2d: brain_finish_job â€” Merge partials, overlay, audio master, git push
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   brain_finish_job:
     needs: [creation_job, brain_prep_job, download_matrix]
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
@@ -941,9 +941,9 @@ jobs:
           rclone copyto shutdown.txt "data:Colab_AutoVideoCreator/ollama_shutdown_${{ github.run_id }}.txt" || true
           echo "[+] Original ollama_server shutdown signal sent."
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # PHASE 3: render_matrix — unchanged, now depends on brain_finish_job
-  # ─────────────────────────────────────────────────────────────────────────────
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # PHASE 3: render_matrix â€” unchanged, now depends on brain_finish_job
+  # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   render_matrix:
     needs: [creation_job, brain_finish_job]
     if: always() && !cancelled() && !failure()
@@ -1009,7 +1009,7 @@ jobs:
           fi
           echo "vault_name=$VAULT_NAME" >> $GITHUB_ENV
           
-          # Always recalculate total_frames directly from Drive — never trust the Python chain
+          # Always recalculate total_frames directly from Drive â€” never trust the Python chain
           # Try public/channels workspace first (RESUME path), then to upload (legacy path)
           TIMELINE_FOUND=false
           
@@ -1039,7 +1039,7 @@ jobs:
             rclone copy "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}" "public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}"
           fi
           rclone copy "data:Colab_AutoVideoCreator/public/audio" "public/audio" --transfers 16
-          # Remotion's src/ does: import '../master_timeline.json' — must be at repo root
+          # Remotion's src/ does: import '../master_timeline.json' â€” must be at repo root
           cp "public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}/master_timeline.json" master_timeline.json
 
       - name: Install Dependencies
