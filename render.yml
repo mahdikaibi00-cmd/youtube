@@ -1,0 +1,1134 @@
+name: Hybrid Cloud Video Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      action_type:
+        description: 'Action Type'
+        required: true
+        default: 'RENDER_ONLY'
+        type: choice
+        options:
+          - CREATE_FRESH
+          - CREATE_AUTOMATIC
+          - RESUME
+          - RENDER_ONLY
+      channel_name:
+        description: 'Channel to operate on'
+        required: true
+        default: 'Grid Hardened'
+        type: choice
+        options:
+          - Grid Hardened
+          - Brew-Fi
+      topic:
+        description: 'Topic Name'
+        required: false
+        type: string
+
+jobs:
+  ollama_server:
+    if: inputs.action_type != 'RENDER_ONLY'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install rclone jq curl wget -y
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Check Checkpoints (Universal Smart Exclusion)
+        id: checkpoint
+        run: |
+          echo "READY_TO_RENDER=false" >> $GITHUB_ENV
+          
+          TOPIC="${{ inputs.topic }}"
+          if [ -n "$TOPIC" ]; then
+            if rclone cat "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/$TOPIC/master_timeline.json" > timeline.json 2>/dev/null; then
+               MISSING_VIDEOS=$(jq '[.timeline[] | select(.media_path == null and .media_paths == null)] | length' timeline.json)
+               MISSING_OVERLAYS=$(jq '[.timeline[] | select(.overlay_image_query != null and (.overlay_image_query | ascii_downcase) != "none" and .overlay_image == null)] | length' timeline.json)
+               if [ "$MISSING_VIDEOS" -eq 0 ] && [ "$MISSING_OVERLAYS" -eq 0 ]; then
+                   echo "READY_TO_RENDER=true" >> $GITHUB_ENV
+                   echo "[+] All assets present. Skipping Ollama server (RENDER_ONLY mode)."
+               fi
+            fi
+          else
+            echo "[*] No topic provided (RESUME/CREATE action). Ollama server will start normally."
+          fi
+
+      - name: Setup Local Ollama
+        if: env.READY_TO_RENDER != 'true'
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama || true
+          OLLAMA_HOST="0.0.0.0" OLLAMA_ORIGINS="*" ollama serve > ollama.log 2>&1 &
+          sleep 5
+          ollama pull qwen2.5:7b
+          ollama pull llava
+          
+          # Pre-warm models into memory so brain_job gets instant responses (no 503 cold-load)
+          echo "Warming up qwen2.5:7b..."
+          curl -s -X POST http://localhost:11434/api/generate -d '{"model":"qwen2.5:7b","prompt":"hi","stream":false}' > /dev/null
+          echo "Warming up llava..."
+          curl -s -X POST http://localhost:11434/api/generate -d '{"model":"llava","prompt":"hi","stream":false}' > /dev/null
+          echo "[+] Models pre-loaded and ready."
+          
+          # Download and run Bore Tunnel (raw TCP, no bot protection, no intercepts)
+          curl -Ls https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz | tar zx
+          sudo mv bore /usr/local/bin/
+          
+          bore local 11434 --to bore.pub > tunnel.log 2>&1 &
+          sleep 5
+          BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' tunnel.log | head -n 1)
+          OLLAMA_URL="http://bore.pub:$BORE_PORT"
+          
+          if [ -z "$BORE_PORT" ]; then
+             echo "Failed to establish tunnel!"
+             cat tunnel.log
+             exit 1
+          fi
+          
+          echo "Ollama API is live at: $OLLAMA_URL"
+          echo "$OLLAMA_URL" > ollama_url.txt
+          rclone copyto ollama_url.txt "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt"
+
+      - name: Keep Alive (Wait for shutdown)
+        if: env.READY_TO_RENDER != 'true'
+        run: |
+          OLLAMA_URL=$(cat ollama_url.txt)
+          PING_COUNTER=0
+          while true; do
+            if rclone lsf "data:Colab_AutoVideoCreator/ollama_shutdown_${{ github.run_id }}.txt" >/dev/null 2>&1; then
+              echo "Shutdown signal received! Terminating server."
+              rclone delete "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" || true
+              rclone delete "data:Colab_AutoVideoCreator/ollama_shutdown_${{ github.run_id }}.txt" || true
+              break
+            fi
+            # Ping Ollama through the tunnel every 60s to keep localhost.run HTTP routing alive
+            # SSH keepalive alone is not enough — localhost.run also drops the HTTP route on inactivity
+            PING_COUNTER=$((PING_COUNTER + 1))
+            if [ $((PING_COUNTER % 4)) -eq 0 ]; then
+              curl -sf -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" --max-time 10 "$OLLAMA_URL/api/tags" > /dev/null 2>&1 && echo "[keep-warm] Tunnel ping OK" || echo "[keep-warm] Tunnel ping failed — will retry"
+            fi
+            sleep 15
+          done
+
+  creation_job:
+    if: inputs.action_type != 'RENDER_ONLY'
+    runs-on: ubuntu-latest
+    outputs:
+      vault_name: ${{ steps.orchestrator.outputs.vault_name }}
+      total_frames: ${{ steps.orchestrator.outputs.total_frames }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-brain-${{ runner.os }}-firefox
+          restore-keys: apt-brain-${{ runner.os }}-
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - name: Install System Dependencies
+        run: |
+          sudo snap remove firefox || true
+          sudo add-apt-repository ppa:mozillateam/ppa -y
+          echo -e 'Package: *\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001' | sudo tee /etc/apt/preferences.d/mozilla-firefox
+          sudo apt-get update
+          sudo apt-get install rclone jq firefox xvfb xclip sox libsox-fmt-all zstd pciutils lshw rubberband-cli -y
+
+
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Check Checkpoints (Universal Smart Exclusion)
+        id: checkpoint
+        run: |
+          echo "SKIP_PROFILE=false" >> $GITHUB_ENV
+          echo "READY_TO_RENDER=false" >> $GITHUB_ENV
+          
+          echo "Probing Google Drive for checkpoints..."
+          VAULT="${{ inputs.topic }}"
+          CHANNEL="${{ inputs.channel_name }}"
+          TIMELINE_JSON=""
+          
+          # Check public/channels workspace first (modern RESUME path)
+          if rclone copy "data:Colab_AutoVideoCreator/public/channels/$CHANNEL/$VAULT/master_timeline.json" . --transfers 4 2>/dev/null && [ -s master_timeline.json ]; then
+            echo "Found master_timeline.json in public/channels workspace."
+            TIMELINE_JSON="master_timeline.json"
+          # Fall back to legacy to upload path
+          elif rclone cat "data:Colab_AutoVideoCreator/channels/$CHANNEL/to upload/$VAULT/master_timeline.json" > master_timeline.json 2>/dev/null && [ -s master_timeline.json ]; then
+            echo "Found master_timeline.json in to upload workspace."
+            TIMELINE_JSON="master_timeline.json"
+          fi
+          
+          if [ -n "$TIMELINE_JSON" ]; then
+             echo "Analyzing completion status..."
+             
+             # Count scenes without downloaded_video
+             MISSING_VIDEOS=$(jq '[.timeline[] | select(.media_path == null and .media_paths == null)] | length' "$TIMELINE_JSON")
+             
+             # Count scenes that requested an overlay but haven't downloaded it
+             MISSING_OVERLAYS=$(jq '[.timeline[] | select(.overlay_image_query != null and (.overlay_image_query | ascii_downcase) != "none" and .overlay_image == null)] | length' "$TIMELINE_JSON")
+             
+             echo "Missing Videos: $MISSING_VIDEOS"
+             echo "Missing Overlays: $MISSING_OVERLAYS"
+             
+             if [ "$MISSING_VIDEOS" -eq 0 ] && [ "$MISSING_OVERLAYS" -eq 0 ]; then
+                 echo "100% READY TO RENDER! Bypassing Ollama and Playwright entirely."
+                 echo "READY_TO_RENDER=true" >> $GITHUB_ENV
+                 echo "SKIP_PROFILE=true" >> $GITHUB_ENV
+             fi
+          fi
+          
+          # If not completely ready, check if we can at least skip Playwright
+          if [ "$READY_TO_RENDER" != "true" ]; then
+             if rclone lsf "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/${{ inputs.topic }}/script.txt" >/dev/null 2>&1; then
+                 echo "Detected script.txt. ChatGPT phase is done. Bypassing Playwright profile."
+                 echo "SKIP_PROFILE=true" >> $GITHUB_ENV
+             fi
+          fi
+
+
+      - name: Run Python Orchestrator
+        id: orchestrator
+        env:
+          ACTION_TYPE: ${{ inputs.action_type }}
+          CHANNEL_NAME: ${{ inputs.channel_name }}
+          TOPIC: ${{ inputs.topic }}
+          CLOUD_TTS_PARALLEL: "1"
+        run: |
+          python -m pip install requests
+          xvfb-run -a python -u .github/scripts/orchestrator.py
+          
+      # NOTE: Shutdown signal is intentionally sent in brain_job AFTER The_Brain.py
+      # finishes, because The_Brain.py needs Ollama for footage/image search queries.
+
+  tts_matrix:
+    needs: [creation_job]
+    if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - name: Install System Dependencies
+        run: |
+          # Remove broken Microsoft repos that cause apt-get update to fail on ubuntu-latest
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list
+          sudo apt-get update -o Acquire::AllowInsecureRepositories=false || sudo apt-get update --allow-unauthenticated || true
+          sudo apt-get install rclone jq sox libsox-fmt-all -y
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Download Scripts & Workspace
+        run: |
+          VAULT="${{ needs.creation_job.outputs.vault_name }}"
+          CHANNEL="${{ inputs.channel_name }}"
+          # Only download what tts_worker.py actually needs — no mp4s, no bulk folders
+          rclone copy "engine:Colab_AutoVideoCreator" . \
+            --include "tts_worker.py" \
+            --include "local_voice_engine.py" \
+            --include "requirements.txt" \
+            --include "gemini_cookies.json" \
+            --transfers 8
+          mkdir -p "public/channels/$CHANNEL/$VAULT"
+          # Download the script + any already-generated WAV chunks
+          rclone copy "data:Colab_AutoVideoCreator/public/channels/$CHANNEL/$VAULT" "public/channels/$CHANNEL/$VAULT" \
+            --include "script.txt" --include "*.wav" --transfers 16
+          # Download master reference voice if present
+          rclone copy "data:Colab_AutoVideoCreator/public/master_voice.wav" "public/" || true
+
+      - name: Install Python Dependencies
+        run: |
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+
+      - name: Run TTS Worker
+        env:
+          TTS_WORKER_ID: ${{ matrix.worker }}
+          TTS_TOTAL_WORKERS: "15"
+          CHANNEL_NAME: ${{ inputs.channel_name }}
+          VAULT_NAME: ${{ needs.creation_job.outputs.vault_name }}
+        run: python -u tts_worker.py
+
+      - name: Upload WAV Chunks to Drive
+        run: |
+          VAULT="${{ needs.creation_job.outputs.vault_name }}"
+          rclone copy "public/channels/${{ inputs.channel_name }}/$VAULT" "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" --include "*.wav" -v
+
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 2a: brain_prep_job — Audio processing + scene alignment + timeline save
+  # Does NOT download clips. Hands off to download_matrix workers.
+  # ─────────────────────────────────────────────────────────────────────────────
+  brain_prep_job:
+    needs: [creation_job, tts_matrix]
+    if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-brain-prep-${{ runner.os }}-firefox
+          restore-keys: apt-brain-prep-${{ runner.os }}-
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - name: Install System Dependencies
+        run: |
+          sudo snap remove firefox || true
+          sudo add-apt-repository ppa:mozillateam/ppa -y
+          echo -e 'Package: *\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001' | sudo tee /etc/apt/preferences.d/mozilla-firefox
+          sudo apt-get update
+          sudo apt-get install rclone jq firefox xvfb xclip sox libsox-fmt-all zstd pciutils lshw -y
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Download Scripts & All WAV Chunks
+        run: |
+          VAULT="${{ needs.creation_job.outputs.vault_name }}"
+          rclone copy "engine:Colab_AutoVideoCreator" . --exclude "node_modules/**" --exclude "out/**" --exclude "*.mp4" --exclude "requirements.txt" --exclude "DELETE_THIS_WHEN_SELLING_firefox_profile/**" --exclude "firefox_stealth_profile/**" --exclude "gemini_selenium_profile/**" --exclude "ChatTTS_Models/**" --transfers 16
+          mkdir -p "public/channels/${{ inputs.channel_name }}/$VAULT"
+          rclone copy "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" "public/channels/${{ inputs.channel_name }}/$VAULT"
+
+      - name: Install Python Dependencies
+        run: |
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          python -m pip install playwright torchcodec soundfile numpy
+          python -m playwright install --with-deps chromium
+
+      - name: Connect to Ollama Brain (for Gemini scene alignment if needed)
+        run: |
+          echo "Fetching Ollama URL from Drive..."
+          for i in $(seq 1 20); do
+            if rclone lsf "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > /dev/null 2>&1; then
+              rclone cat "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > ollama_url.txt
+              OLLAMA_URL=$(cat ollama_url.txt)
+              echo "Connected to Ollama Brain at $OLLAMA_URL"
+              echo "OLLAMA_BASE_URL=$OLLAMA_URL" >> $GITHUB_ENV
+              break
+            fi
+            echo "Waiting for Ollama tunnel... ($i/20)"
+            sleep 15
+          done
+          if [ -z "$OLLAMA_URL" ]; then
+            echo "[!] WARNING: Could not reach Ollama. The_Brain.py will run without it."
+          fi
+
+      - name: Run The_Brain PREP phase (audio + timeline, no clip downloads)
+        env:
+          BRAIN_PHASE: "prep"
+          CURRENT_AUTO_MODE: "1"
+          CURRENT_SAFE_TOPIC: "public/channels/${{ inputs.channel_name }}/${{ needs.creation_job.outputs.vault_name }}"
+          AUTO_GEMINI_MODE: "1"
+          CLOUD_TTS_PARALLEL: "0"
+          OLLAMA_BASE_URL: ${{ env.OLLAMA_BASE_URL }}
+          AUTO_WORKSPACE_FOLDER: "public/channels/${{ inputs.channel_name }}/${{ needs.creation_job.outputs.vault_name }}"
+          AUTO_TARGET_FOLDER: "channels/${{ inputs.channel_name }}/to upload/${{ needs.creation_job.outputs.vault_name }}"
+        run: xvfb-run -a python -u The_Brain.py
+
+
+      - name: Save Fresh Cookies to Drive
+        if: always()
+        run: |
+          rclone copyto gemini_cookies.json "engine:Colab_AutoVideoCreator/gemini_cookies.json" -v || true
+
+      - name: Upload Timeline to Drive
+        if: always()
+        run: |
+          VAULT="${{ needs.creation_job.outputs.vault_name }}"
+          rclone copy "public/channels/${{ inputs.channel_name }}/$VAULT" "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" --transfers 16 -v || true
+          rclone copy "channels/${{ inputs.channel_name }}/to upload/$VAULT" "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/$VAULT" --transfers 16 -v || true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 2b: ollama_pool — 8 dedicated Ollama servers, one per download worker
+  # Starts after tts_matrix (so tts's 15 slots are freed before these 8 boot)
+  # Each registers its URL to Drive and waits for its shutdown signal.
+  # ─────────────────────────────────────────────────────────────────────────────
+  ollama_pool:
+    needs: [tts_matrix]
+    if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - name: Install System Dependencies
+        run: sudo apt-get install rclone jq curl -y
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Boot Ollama + Register URL to Drive
+        run: |
+          WORKER_ID=${{ matrix.worker }}
+          POOL_DIR="data:Colab_AutoVideoCreator/ollama_pool_${{ github.run_id }}"
+
+          curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama || true
+          OLLAMA_HOST="0.0.0.0" OLLAMA_ORIGINS="*" ollama serve > ollama.log 2>&1 &
+          sleep 5
+          ollama pull qwen2.5:7b
+
+          # Pre-warm model
+          curl -s -X POST http://localhost:11434/api/generate \
+            -d '{"model":"qwen2.5:7b","prompt":"hi","stream":false}' > /dev/null
+
+          # Start bore tunnel
+          curl -Ls https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz | tar zx
+          sudo mv bore /usr/local/bin/
+          bore local 11434 --to bore.pub > tunnel.log 2>&1 &
+          sleep 8
+          BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' tunnel.log | head -n 1)
+
+          if [ -z "$BORE_PORT" ]; then
+            echo "ERROR: bore tunnel failed!"
+            cat tunnel.log
+            exit 1
+          fi
+
+          OLLAMA_URL="http://bore.pub:$BORE_PORT"
+          echo "$OLLAMA_URL" > ollama_url.txt
+          rclone copyto ollama_url.txt "$POOL_DIR/worker_${WORKER_ID}.txt"
+          echo "[Ollama Pool Worker $WORKER_ID] Live at $OLLAMA_URL"
+
+          # Keep alive — wait for shutdown signal from download_worker
+          PING_COUNTER=0
+          while true; do
+            if rclone lsf "$POOL_DIR/shutdown_${WORKER_ID}.txt" > /dev/null 2>&1; then
+              echo "[Ollama Pool Worker $WORKER_ID] Shutdown received. Terminating."
+              rclone delete "$POOL_DIR/worker_${WORKER_ID}.txt" || true
+              rclone delete "$POOL_DIR/shutdown_${WORKER_ID}.txt" || true
+              break
+            fi
+            PING_COUNTER=$((PING_COUNTER + 1))
+            if [ $((PING_COUNTER % 4)) -eq 0 ]; then
+              curl -sf --max-time 10 "$OLLAMA_URL/api/tags" > /dev/null 2>&1 \
+                && echo "[keep-warm $WORKER_ID] OK" \
+                || echo "[keep-warm $WORKER_ID] ping failed, retrying"
+            fi
+            sleep 15
+          done
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 2c: download_matrix — 8 parallel footage downloaders
+  # Each worker uses its dedicated ollama_pool Ollama server.
+  # Fires after brain_prep_job has saved the aligned timeline to Drive.
+  # ─────────────────────────────────────────────────────────────────────────────
+  download_matrix:
+    needs: [creation_job, brain_prep_job]
+    if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - name: Install System Dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list
+          sudo apt-get update || true
+          sudo apt-get install rclone jq sox libsox-fmt-all xvfb -y
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Download All Scripts & Workspace from Drive
+        run: |
+          VAULT="${{ needs.creation_job.outputs.vault_name }}"
+          rclone copy "engine:Colab_AutoVideoCreator" . \
+            --exclude "node_modules/**" --exclude "out/**" --exclude "*.mp4" \
+            --exclude "requirements.txt" --exclude "DELETE_THIS_WHEN_SELLING_firefox_profile/**" \
+            --exclude "firefox_stealth_profile/**" --exclude "gemini_selenium_profile/**" \
+            --exclude "ChatTTS_Models/**" --transfers 16
+          mkdir -p "public/channels/${{ inputs.channel_name }}/$VAULT"
+          rclone copy "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" \
+            "public/channels/${{ inputs.channel_name }}/$VAULT" --transfers 16
+
+      - name: Install Python Dependencies
+        run: |
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run Download Worker
+        env:
+          DOWNLOAD_WORKER_ID: ${{ matrix.worker }}
+          DOWNLOAD_TOTAL_WORKERS: "8"
+          CHANNEL_NAME: ${{ inputs.channel_name }}
+          VAULT_NAME: ${{ needs.creation_job.outputs.vault_name }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: xvfb-run -a python -u download_worker.py
+
+      - name: Upload All Downloaded Assets to Drive
+        if: always()
+        run: |
+          VAULT="${{ needs.creation_job.outputs.vault_name }}"
+          rclone copy "public/channels/${{ inputs.channel_name }}/$VAULT/assets" \
+            "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT/assets" \
+            --transfers 16 -v || true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 2d: brain_finish_job — Merge partials, overlay, audio master, git push
+  # ─────────────────────────────────────────────────────────────────────────────
+  brain_finish_job:
+    needs: [creation_job, brain_prep_job, download_matrix]
+    if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - name: Install System Dependencies
+        run: |
+          sudo snap remove firefox || true
+          sudo add-apt-repository ppa:mozillateam/ppa -y
+          echo -e 'Package: *\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001' | sudo tee /etc/apt/preferences.d/mozilla-firefox
+          sudo apt-get update
+          sudo apt-get install rclone jq firefox xvfb xclip sox libsox-fmt-all zstd -y
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Configure Git for auto-push
+        run: |
+          git config --global user.email "pipeline@github-actions.com"
+          git config --global user.name "Pipeline Bot"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+
+      - name: Download All Scripts, Assets & Workspace from Drive
+        run: |
+          VAULT="${{ needs.creation_job.outputs.vault_name }}"
+          rclone copy "engine:Colab_AutoVideoCreator" . \
+            --exclude "node_modules/**" --exclude "out/**" --exclude "*.mp4" \
+            --exclude "requirements.txt" --exclude "DELETE_THIS_WHEN_SELLING_firefox_profile/**" \
+            --exclude "firefox_stealth_profile/**" --exclude "gemini_selenium_profile/**" \
+            --exclude "ChatTTS_Models/**" --transfers 16
+          mkdir -p "public/channels/${{ inputs.channel_name }}/$VAULT"
+          if rclone lsf "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" >/dev/null 2>&1; then
+            rclone copy "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" "public/channels/${{ inputs.channel_name }}/$VAULT" --transfers 16
+          else
+            rclone copy "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/$VAULT" "public/channels/${{ inputs.channel_name }}/$VAULT" --transfers 16
+          fi
+          rclone copy "data:Colab_AutoVideoCreator/public/audio" "public/audio" --transfers 16
+
+      - name: Install Python Dependencies
+        run: |
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          python -m pip install playwright torchcodec soundfile numpy
+          python -m playwright install --with-deps chromium
+
+      - name: Merge Partial Timelines
+        env:
+          CHANNEL_NAME: ${{ inputs.channel_name }}
+          VAULT_NAME: ${{ needs.creation_job.outputs.vault_name }}
+          DOWNLOAD_TOTAL_WORKERS: "8"
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python -u merge_timelines.py
+
+      - name: Connect to Ollama Brain (for Vision verification)
+        run: |
+          echo "Fetching Ollama URL from Drive..."
+          for i in $(seq 1 20); do
+            if rclone lsf "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > /dev/null 2>&1; then
+              rclone cat "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > ollama_url.txt
+              OLLAMA_URL=$(cat ollama_url.txt)
+              echo "Connected to Ollama Brain at $OLLAMA_URL"
+              echo "OLLAMA_BASE_URL=$OLLAMA_URL" >> $GITHUB_ENV
+              break
+            fi
+            echo "Waiting for Ollama tunnel... ($i/20)"
+            sleep 15
+          done
+          if [ -z "$OLLAMA_URL" ]; then
+            echo "[!] WARNING: Could not reach Ollama. The_Brain.py will run without it."
+          fi
+
+      - name: Run The_Brain FINISH phase (overlay + audio master + git push)
+        env:
+          BRAIN_PHASE: "finish"
+          CURRENT_AUTO_MODE: "1"
+          CURRENT_SAFE_TOPIC: "public/channels/${{ inputs.channel_name }}/${{ needs.creation_job.outputs.vault_name }}"
+          AUTO_GEMINI_MODE: "1"
+          CLOUD_TTS_PARALLEL: "0"
+          AUTO_WORKSPACE_FOLDER: "public/channels/${{ inputs.channel_name }}/${{ needs.creation_job.outputs.vault_name }}"
+          AUTO_TARGET_FOLDER: "channels/${{ inputs.channel_name }}/to upload/${{ needs.creation_job.outputs.vault_name }}"
+        run: xvfb-run -a python -u The_Brain.py
+
+      - name: Save Fresh Cookies to Drive
+        if: always()
+        run: |
+          rclone copyto gemini_cookies.json "engine:Colab_AutoVideoCreator/gemini_cookies.json" -v || true
+
+      - name: Upload Final Assets to Drive
+        if: always()
+        run: |
+          VAULT="${{ needs.creation_job.outputs.vault_name }}"
+          rclone copy "public/channels/${{ inputs.channel_name }}/$VAULT" \
+            "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" \
+            --transfers 16 -v || true
+          rclone copy "channels/${{ inputs.channel_name }}/to upload/$VAULT" \
+            "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/$VAULT" \
+            --transfers 16 -v || true
+          rclone copy "public/audio" "data:Colab_AutoVideoCreator/public/audio" --transfers 16 -v || true
+
+      - name: Send Shutdown Signal to original ollama_server
+        if: always()
+        run: |
+          echo "shutdown" > shutdown.txt
+          rclone copyto shutdown.txt "data:Colab_AutoVideoCreator/ollama_shutdown_${{ github.run_id }}.txt" || true
+          echo "[+] Original ollama_server shutdown signal sent."
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 3: render_matrix — unchanged, now depends on brain_finish_job
+  # ─────────────────────────────────────────────────────────────────────────────
+  render_matrix:
+    needs: [creation_job, brain_finish_job]
+    if: always() && !cancelled() && !failure()
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rclone
+        run: sudo apt-get install rclone jq -y
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Set Vault Inputs
+        id: vault_inputs
+        run: |
+          if [ "${{ inputs.action_type }}" == "RENDER_ONLY" ]; then
+             VAULT_NAME="${{ inputs.topic }}"
+          else
+             VAULT_NAME="${{ needs.creation_job.outputs.vault_name }}"
+          fi
+          echo "vault_name=$VAULT_NAME" >> $GITHUB_ENV
+          
+          # Always recalculate total_frames directly from Drive — never trust the Python chain
+          # Try public/channels workspace first (RESUME path), then to upload (legacy path)
+          TIMELINE_FOUND=false
+          
+          if rclone copy "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT_NAME/master_timeline.json" . --transfers 4 2>/dev/null && [ -s master_timeline.json ]; then
+            TIMELINE_FOUND=true
+            echo "[+] Timeline found in public/channels workspace."
+          elif rclone cat "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/$VAULT_NAME/master_timeline.json" > master_timeline.json 2>/dev/null && [ -s master_timeline.json ]; then
+            TIMELINE_FOUND=true
+            echo "[+] Timeline found in to upload workspace."
+          fi
+          
+          if [ "$TIMELINE_FOUND" == "true" ]; then
+            TOTAL=$(jq '((.meta // .metadata // {}).total_duration_ms // 0) | if . > 0 then ((. / 1000) * 30 | round) + 60 else 0 end' master_timeline.json)
+            echo "[+] Calculated TOTAL_FRAMES=$TOTAL from master_timeline.json"
+          else
+            TOTAL=360
+            echo "[!] WARNING: master_timeline.json not found on Drive. Defaulting to TOTAL_FRAMES=360."
+          fi
+          echo "total_frames=$TOTAL" >> $GITHUB_ENV
+
+      - name: Download Asset Chunk from GDrive
+        run: |
+          mkdir -p public/channels/${{ inputs.channel_name }}/"${{ env.vault_name }}"
+          if rclone lsf "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}" >/dev/null 2>&1; then
+            rclone copy "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}" "public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}"
+          else
+            rclone copy "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}" "public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}"
+          fi
+          rclone copy "data:Colab_AutoVideoCreator/public/audio" "public/audio" --transfers 16
+          # Remotion's src/ does: import '../master_timeline.json' — must be at repo root
+          cp "public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}/master_timeline.json" master_timeline.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Calculate Chunk Frames
+        id: calc
+        run: |
+          # Always read directly from the local master_timeline.json (downloaded in previous step)
+          # Never trust env vars which may have failed to fetch from Drive
+          TOTAL_FRAMES=$(jq '((.meta // .metadata // {}).total_duration_ms // 0) | if . > 0 then ((. / 1000) * 30 | round) + 60 else 0 end' master_timeline.json 2>/dev/null)
+          
+          if [ -z "$TOTAL_FRAMES" ] || [ "$TOTAL_FRAMES" -le 60 ]; then
+            echo "[!] FATAL: Could not read valid total_frames from master_timeline.json (got: '$TOTAL_FRAMES')"
+            echo "[!] Dumping master_timeline.json metadata for debug:"
+            jq '{meta: .meta, metadata: .metadata}' master_timeline.json 2>/dev/null || echo "master_timeline.json missing or invalid"
+            exit 1
+          fi
+          
+          echo "[+] TOTAL_FRAMES=$TOTAL_FRAMES (read from master_timeline.json)"
+          
+          CHUNK_IDX=${{ matrix.chunk }}
+          NUM_CHUNKS=20
+          
+          FRAMES_PER_CHUNK=$((TOTAL_FRAMES / NUM_CHUNKS))
+          START_FRAME=$((CHUNK_IDX * FRAMES_PER_CHUNK))
+          
+          if [ $CHUNK_IDX -eq $((NUM_CHUNKS - 1)) ]; then
+            END_FRAME=$((TOTAL_FRAMES - 1))
+          else
+            END_FRAME=$((START_FRAME + FRAMES_PER_CHUNK - 1))
+          fi
+          
+          echo "[+] Chunk $CHUNK_IDX: frames $START_FRAME-$END_FRAME (of $TOTAL_FRAMES total)"
+          echo "start=$START_FRAME" >> $GITHUB_OUTPUT
+          echo "end=$END_FRAME" >> $GITHUB_OUTPUT
+
+      - name: Render Video Chunk
+        run: |
+          npx remotion render src/index.tsx AutomatedDocumentary chunk_${{ matrix.chunk }}.mp4 --frames=${{ steps.calc.outputs.start }}-${{ steps.calc.outputs.end }} --gl=angle --env CHANNEL_NAME=${{ inputs.channel_name }} --env VAULT_NAME="${{ env.vault_name }}"
+
+      - name: Upload Chunk Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-${{ matrix.chunk }}
+          path: chunk_${{ matrix.chunk }}.mp4
+          retention-days: 1
+
+  stitch_and_upload:
+    needs: [creation_job, brain_finish_job, render_matrix]
+    if: always() && !cancelled() && !failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get install rclone jq -y
+          python -m pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: Configure rclone Silently
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          DATA_TOKEN_RAW: ${{ inputs.channel_name == 'Midi-Fi' && secrets.G_DRIVE_TOKEN_MIDIFI || secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Engine Token
+          E_ACCESS=$(echo $ENGINE_TOKEN_RAW | jq -r '.token')
+          E_REFRESH=$(echo $ENGINE_TOKEN_RAW | jq -r '.refresh_token')
+          E_EXPIRY=$(echo $ENGINE_TOKEN_RAW | jq -r '.expiry')
+          ENGINE_TOKEN="{\"access_token\":\"$E_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$E_REFRESH\",\"expiry\":\"$E_EXPIRY\"}"
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [engine]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Set Vault Inputs
+        id: vault_inputs
+        run: |
+          if [ "${{ inputs.action_type }}" == "RENDER_ONLY" ]; then
+             echo "vault_name=${{ inputs.topic }}" >> $GITHUB_ENV
+          else
+             echo "vault_name=${{ needs.creation_job.outputs.vault_name }}" >> $GITHUB_ENV
+          fi
+
+      - name: Download Audio Assets from GDrive
+        run: |
+          mkdir -p public/channels/${{ inputs.channel_name }}/"${{ env.vault_name }}"
+          rclone copy "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}" "public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}" --include "master_audio.wav" --include "voiceover.wav" --include "metadata.json" --include "blog_post.json" --include "thumbnail.png"
+
+      - name: Download all chunks
+        uses: actions/download-artifact@v4
+        with:
+          path: chunks/
+
+      - name: Concatenate and Mix Audio
+        run: |
+          echo "Downloading 'to upload' metadata folder..."
+          mkdir -p "channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}"
+          rclone copy "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}" "channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}"
+          
+          echo "" > file_list.txt
+          for i in {0..19}; do
+            if [ -f "chunks/chunk-$i/chunk_$i.mp4" ]; then
+              echo "file 'chunks/chunk-$i/chunk_$i.mp4'" >> file_list.txt
+            fi
+          done
+          
+          ffmpeg -f concat -safe 0 -i file_list.txt -c copy final_video_sfx.mp4
+          ffmpeg -i final_video_sfx.mp4 -i "public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}/master_audio.wav" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest "channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}/final_video.mp4"
+          
+      - name: Sync Final Video to Google Drive
+        run: |
+          echo "Saving final video to Google Drive 'to upload' folder..."
+          rclone copy "channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}/final_video.mp4" "data:Colab_AutoVideoCreator/channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}" -v
+          
+      - name: Upload Video to YouTube API
+        env:
+          AUTO_TARGET_FOLDER: "channels/${{ inputs.channel_name }}/to upload/${{ env.vault_name }}"
+        run: |
+          echo "Downloading private uploader script and tokens from Google Drive..."
+          rclone copy "engine:Colab_AutoVideoCreator/youtube_uploader.py" "." -v
+          mkdir -p tokens
+          rclone copy "engine:Colab_AutoVideoCreator/tokens" "tokens" -v
+          
+          echo "Installing Google API requirements..."
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
+          
+          echo "Running YouTube Uploader..."
+          python youtube_uploader.py
+          
+      - name: Clean Up Public Assets Folder
+        run: |
+          echo "Purging raw rendering assets from Google Drive to save space..."
+          rclone purge "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}" || true
+          
+          # Clean up ollama pool directory
+          rclone purge "data:Colab_AutoVideoCreator/ollama_pool_${{ github.run_id }}" || true
+
