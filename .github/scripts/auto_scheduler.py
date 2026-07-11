@@ -58,7 +58,7 @@ def pop_topic(channel):
     with open('topics.txt', 'w', encoding='utf-8') as f:
         f.write('\n'.join(lines))
         
-    run_cmd(f"rclone copy 'topics.txt' '{rclone_path}'")
+    run_cmd(f"rclone copyto 'topics.txt' '{rclone_path}'")
     os.remove('topics.txt')
     return topic
 
