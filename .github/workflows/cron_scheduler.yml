@@ -1,0 +1,47 @@
+name: Automated Random Cron Scheduler
+
+on:
+  schedule:
+    # Run every hour exactly on the hour
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  scheduler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install rclone jq curl wget -y
+
+      - name: Install Python Dependencies
+        run: python -m pip install requests
+
+      - name: Configure rclone Silently
+        env:
+          DATA_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.config/rclone
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+          
+      - name: Run Intelligent Auto-Scheduler
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: python .github/scripts/auto_scheduler.py
