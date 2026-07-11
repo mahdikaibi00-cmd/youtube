@@ -93,7 +93,7 @@ def main():
         for ch in ["Grid Hardened", "Brew-Fi"]:
             topic = pop_topic(ch)
             if topic:
-                trigger_pipeline(ch, topic)
+                trigger_workflow(ch, topic)
         return
     
     channel = None
