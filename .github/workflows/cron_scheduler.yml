@@ -2,8 +2,8 @@ name: Automated Random Cron Scheduler
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-    - cron: '0 14 * * *'
+    # Run every hour exactly on the hour
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       force_channel:
@@ -16,28 +16,111 @@ on:
           - "Brew-Fi"
 
 jobs:
-  dispatch:
+  scheduler:
     runs-on: ubuntu-latest
     steps:
-      - name: Determine Channel
-        id: channel
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install rclone jq curl wget -y
+
+      - name: Configure rclone Silently
+        env:
+          DATA_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
         run: |
+          mkdir -p ~/.config/rclone
+          
+          # Data Token
+          D_ACCESS=$(echo $DATA_TOKEN_RAW | jq -r '.token')
+          D_REFRESH=$(echo $DATA_TOKEN_RAW | jq -r '.refresh_token')
+          D_EXPIRY=$(echo $DATA_TOKEN_RAW | jq -r '.expiry')
+          DATA_TOKEN="{\"access_token\":\"$D_ACCESS\",\"token_type\":\"Bearer\",\"refresh_token\":\"$D_REFRESH\",\"expiry\":\"$D_EXPIRY\"}"
+          
+          cat << EOF > ~/.config/rclone/rclone.conf
+          [data]
+          type = drive
+          client_id = $CLIENT_ID
+          client_secret = $CLIENT_SECRET
+          scope = drive
+          token = $DATA_TOKEN
+          EOF
+
+      - name: Run Intelligent Auto-Scheduler (Pure Bash)
+        id: schedule
+        run: |
+          # 1. Check for manual override
           FORCE="${{ inputs.force_channel }}"
           if [ -n "$FORCE" ]; then
+            echo "Manual override detected for $FORCE"
             echo "channel=$FORCE" >> $GITHUB_OUTPUT
+            echo "run_pipeline=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 2. Determine Channel & Probability based on UTC Hour
+          HOUR=$(date -u +"%-H") # 0-23 without leading zeros
+          PROB=0
+          CHANNEL=""
+          
+          if [ "$HOUR" -ge 0 ] && [ "$HOUR" -le 3 ]; then
+            CHANNEL="Grid Hardened"
+            if [ "$HOUR" -eq 0 ]; then PROB=25; fi
+            if [ "$HOUR" -eq 1 ]; then PROB=33; fi
+            if [ "$HOUR" -eq 2 ]; then PROB=50; fi
+            if [ "$HOUR" -eq 3 ]; then PROB=100; fi
+          elif [ "$HOUR" -ge 14 ] && [ "$HOUR" -le 16 ]; then
+            CHANNEL="Brew-Fi"
+            if [ "$HOUR" -eq 14 ]; then PROB=33; fi
+            if [ "$HOUR" -eq 15 ]; then PROB=50; fi
+            if [ "$HOUR" -eq 16 ]; then PROB=100; fi
           else
-            CRON="${{ github.event.schedule }}"
-            if [ "$CRON" = "0 0 * * *" ]; then
-              echo "channel=Grid Hardened" >> $GITHUB_OUTPUT
-            else
-              echo "channel=Brew-Fi" >> $GITHUB_OUTPUT
-            fi
+            echo "Hour $HOUR is outside scheduling windows. Exiting."
+            echo "run_pipeline=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Current hour: $HOUR. Channel: $CHANNEL. Probability to run: $PROB%"
+          
+          # 3. Check if channel already ran today
+          echo "Checking scheduler_state.json from Google Drive..."
+          rclone copy data:Colab_AutoVideoCreator/scheduler_state.json . || echo "{}" > scheduler_state.json
+          
+          # Ensure file has valid JSON if empty
+          if [ ! -s scheduler_state.json ] || ! jq -e . scheduler_state.json >/dev/null 2>&1; then
+            echo "{}" > scheduler_state.json
+          fi
+          
+          TODAY=$(date -u +"%Y-%m-%d")
+          LAST_RUN=$(jq -r ".[\"$CHANNEL\"].last_run // empty" scheduler_state.json)
+          
+          if [ "$LAST_RUN" = "$TODAY" ]; then
+            echo "Channel $CHANNEL already ran today. Exiting."
+            echo "run_pipeline=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 4. Roll the dice
+          ROLL=$(( ( RANDOM % 100 ) + 1 ))
+          if [ "$ROLL" -le "$PROB" ]; then
+            echo "Dice roll SUCCESS ($ROLL <= $PROB). Executing run..."
+            
+            # Update state file
+            jq ".[\"$CHANNEL\"].last_run = \"$TODAY\"" scheduler_state.json > tmp.json && mv tmp.json scheduler_state.json
+            rclone copyto scheduler_state.json data:Colab_AutoVideoCreator/scheduler_state.json
+            
+            echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+            echo "run_pipeline=true" >> $GITHUB_OUTPUT
+          else
+            echo "Dice roll FAILED ($ROLL > $PROB). Will retry next hour."
+            echo "run_pipeline=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Trigger Pipeline
+        if: steps.schedule.outputs.run_pipeline == 'true'
         run: |
           curl -X POST \
+            -s \
             -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.repository }}/actions/workflows/render.yml/dispatches \
-            -d '{"ref":"main","inputs":{"action_type":"CREATE_AUTOMATIC","channel_name":"${{ steps.channel.outputs.channel }}","topic":""}}'
+            -d '{"ref":"main","inputs":{"action_type":"CREATE_AUTOMATIC","channel_name":"${{ steps.schedule.outputs.channel }}","topic":""}}'
