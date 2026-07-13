@@ -13,5 +13,4 @@ Config.setHardwareAcceleration('if-possible');
 
 // Quality optimizations (CRF is INCOMPATIBLE with hardware acceleration - use bitrate instead)
 // Config.setCrf(16); // DISABLED - breaks NVENC
-Config.setPixelFormat('yuv420p');Config.setPuppeteerTimeout(120000);
-Config.setDelayRenderTimeoutInMilliseconds(120000);
+Config.setPixelFormat('yuv420p');Config.setDelayRenderTimeoutInMilliseconds(120000);
