@@ -116,7 +116,7 @@ jobs:
           curl -Ls https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz | tar zx
           sudo mv bore /usr/local/bin/
           
-          MAX_RETRIES=5
+          MAX_RETRIES=10
           RETRY_COUNT=0
           BORE_PORT=""
           
@@ -487,7 +487,7 @@ jobs:
       - name: Connect to Ollama Brain (for Gemini scene alignment if needed)
         run: |
           echo "Fetching Ollama URL from Drive..."
-          for i in $(seq 1 20); do
+          for i in $(seq 1 120); do
             if rclone lsf --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > /dev/null 2>&1; then
               rclone cat --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > ollama_url.txt
               OLLAMA_URL=$(cat ollama_url.txt)
@@ -606,7 +606,7 @@ jobs:
           curl -Ls https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz | tar zx
           sudo mv bore /usr/local/bin/
           
-          MAX_RETRIES=5
+          MAX_RETRIES=10
           RETRY_COUNT=0
           BORE_PORT=""
           
@@ -745,7 +745,7 @@ jobs:
       - name: Connect to Ollama Brain
         run: |
           echo "Fetching Ollama URL from Drive..."
-          for i in $(seq 1 20); do
+          for i in $(seq 1 120); do
             if rclone lsf --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > /dev/null 2>&1; then
               rclone cat --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > ollama_url.txt
               OLLAMA_URL=$(cat ollama_url.txt)
@@ -890,7 +890,7 @@ jobs:
       - name: Connect to Ollama Brain (for Vision verification)
         run: |
           echo "Fetching Ollama URL from Drive..."
-          for i in $(seq 1 20); do
+          for i in $(seq 1 120); do
             if rclone lsf --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > /dev/null 2>&1; then
               rclone cat --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/ollama_url_${{ github.run_id }}.txt" > ollama_url.txt
               OLLAMA_URL=$(cat ollama_url.txt)
@@ -1250,3 +1250,5 @@ jobs:
           echo "shutdown" > shutdown.txt
           rclone copyto --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s shutdown.txt "data:Colab_AutoVideoCreator/ollama_shutdown_${{ github.run_id }}.txt" || true
           echo "[+] Failsafe shutdown signal sent!"
+            rclone purge --drive-use-trash=false "data:Colab_AutoVideoCreator/ollama_pool_$\{\{ github.run_id \}\}" || true
+            echo "[+] Failsafe pool cleanup complete!"
