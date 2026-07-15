@@ -418,7 +418,15 @@ jobs:
           if [ -n "$VAULT" ]; then
             mkdir -p "public/channels/$CHANNEL/$VAULT"
             # Download the script + any already-generated WAV chunks
-            rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/$CHANNEL/$VAULT" "public/channels/$CHANNEL/$VAULT" \
+            if rclone lsf --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/$CHANNEL/$VAULT" >/dev/null 2>&1; then
+
+              rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/$CHANNEL/$VAULT" "public/channels/$CHANNEL/$VAULT" \
+
+            else
+
+              rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/channels/$CHANNEL/to upload/$VAULT" "public/channels/$CHANNEL/$VAULT" \
+
+            fi
               --include "script.txt" --include "*.wav" --transfers 16
           fi
           # Download master reference voice if present
@@ -517,7 +525,15 @@ jobs:
           VAULT="${{ needs.creation_job.outputs.vault_name }}"
           rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "engine:Colab_AutoVideoCreator" . --exclude "channels/**" --exclude "public/channels/**" --exclude "error_dumps/**" --exclude "node_modules/**" --exclude "out/**" --exclude "*.mp4" --exclude "requirements.txt" --exclude "DELETE_THIS_WHEN_SELLING_firefox_profile/**" --exclude "firefox_stealth_profile/**" --exclude "gemini_selenium_profile/**" --exclude "ChatTTS_Models/**" --transfers 16
           mkdir -p "public/channels/${{ inputs.channel_name }}/$VAULT"
-          rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" "public/channels/${{ inputs.channel_name }}/$VAULT"
+          if rclone lsf --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${ inputs.channel_name }/$VAULT" >/dev/null 2>&1; then
+
+            rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${ inputs.channel_name }/$VAULT" "public/channels/${ inputs.channel_name }/$VAULT"
+
+          else
+
+            rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/channels/${ inputs.channel_name }/to upload/$VAULT" "public/channels/${ inputs.channel_name }/$VAULT"
+
+          fi
 
       - name: Install Python Dependencies
         run: |
@@ -781,8 +797,19 @@ jobs:
             --exclude "firefox_stealth_profile/**" --exclude "gemini_selenium_profile/**" \
             --exclude "ChatTTS_Models/**" --transfers 16
           mkdir -p "public/channels/${{ inputs.channel_name }}/$VAULT"
-          rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/$VAULT" \
-            "public/channels/${{ inputs.channel_name }}/$VAULT" --transfers 16
+          if rclone lsf --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${ inputs.channel_name }/$VAULT" >/dev/null 2>&1; then
+
+            rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${ inputs.channel_name }/$VAULT" \
+
+              "public/channels/${ inputs.channel_name }/$VAULT" --transfers 16
+
+          else
+
+            rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/channels/${ inputs.channel_name }/to upload/$VAULT" \
+
+              "public/channels/${ inputs.channel_name }/$VAULT" --transfers 16
+
+          fi
 
       - name: Install Python Dependencies
         run: |
@@ -1204,7 +1231,15 @@ jobs:
       - name: Download Audio Assets from GDrive
         run: |
           mkdir -p public/channels/${{ inputs.channel_name }}/"${{ env.vault_name }}"
-          rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}" "public/channels/${{ inputs.channel_name }}/${{ env.vault_name }}" --include "master_audio.wav" --include "voiceover.wav" --include "metadata.json" --include "blog_post.json" --include "thumbnail.png"
+          if rclone lsf --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${ inputs.channel_name }/${ env.vault_name }" >/dev/null 2>&1; then
+
+            rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/public/channels/${ inputs.channel_name }/${ env.vault_name }" "public/channels/${ inputs.channel_name }/${ env.vault_name }" --include "master_audio.wav" --include "voiceover.wav" --include "metadata.json" --include "blog_post.json" --include "thumbnail.png"
+
+          else
+
+            rclone copy --tpslimit 10 --tpslimit-burst 10 --retries 5 --contimeout 60s "data:Colab_AutoVideoCreator/channels/${ inputs.channel_name }/to upload/${ env.vault_name }" "public/channels/${ inputs.channel_name }/${ env.vault_name }" --include "master_audio.wav" --include "voiceover.wav" --include "metadata.json" --include "blog_post.json" --include "thumbnail.png"
+
+          fi
 
       - name: Download all chunks
         uses: actions/download-artifact@v4
