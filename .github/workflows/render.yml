@@ -16,11 +16,11 @@ on:
       channel_name:
         description: 'Channel to operate on'
         required: true
-        default: 'ClassZ'
+        default: 'Grid Hardened'
         type: choice
         options:
-          - ClassZ
-          - Midi-Fi
+          - Grid Hardened
+          - Brew-Fi
       topic:
         description: 'Topic Name'
         required: false
