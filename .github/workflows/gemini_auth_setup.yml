@@ -1,0 +1,47 @@
+name: Gemini Cloud Auth Setup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  auth-setup:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install playwright playwright-stealth
+          playwright install chromium
+
+      - name: Setup Ngrok RDP
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        shell: powershell
+
+      - name: Download and Run Ngrok
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_TOKEN }}
+        run: |
+          Invoke-WebRequest -Uri https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
+          Expand-Archive ngrok.zip
+          .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
+          Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
+          Start-Sleep -Seconds 10
+          $resp = Invoke-WebRequest -Uri http://localhost:4040/api/tunnels
+          $tunnels = $resp.Content | ConvertFrom-Json
+          $tunnels.tunnels[0].public_url
+          echo "Please connect to RDP using the address above."
+        shell: powershell
+
+      - name: Keep Runner Alive for Login
+        run: Start-Sleep -Seconds 3600
+        shell: powershell
