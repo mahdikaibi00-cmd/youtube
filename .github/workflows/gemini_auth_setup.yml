@@ -62,12 +62,31 @@ jobs:
         run: |
           choco install ngrok -y
           ngrok authtoken $Env:NGROK_AUTH_TOKEN
-          Start-Process -FilePath "ngrok" -ArgumentList "tcp 3389" -NoNewWindow
-          Start-Sleep -Seconds 10
-          $resp = Invoke-WebRequest -Uri http://localhost:4040/api/tunnels
-          $tunnels = $resp.Content | ConvertFrom-Json
-          $tunnels.tunnels[0].public_url
-          echo "Please connect to RDP using the address above."
+          Start-Process -FilePath "ngrok" -ArgumentList "tcp 3389 --log=ngrok.log" -WindowStyle Hidden
+          
+          $tunnelUrl = ""
+          for ($i = 0; $i -lt 15; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                  $resp = Invoke-RestMethod -Uri http://localhost:4040/api/tunnels -ErrorAction Stop
+                  if ($resp.tunnels.Count -gt 0) {
+                      $tunnelUrl = $resp.tunnels[0].public_url
+                      break
+                  }
+              } catch {
+                  Write-Host "Waiting for ngrok to start..."
+              }
+          }
+          
+          if ($tunnelUrl -eq "") {
+              Write-Host "Ngrok failed to start! Printing logs:"
+              Get-Content ngrok.log -ErrorAction SilentlyContinue
+              exit 1
+          }
+          
+          Write-Host "=========================================="
+          Write-Host "Please connect to RDP using the address: $tunnelUrl"
+          Write-Host "=========================================="
         shell: powershell
 
       - name: Keep Runner Alive for Login
