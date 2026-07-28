@@ -27,6 +27,35 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
         shell: powershell
 
+      - name: Install Rclone & WinFsp
+        run: choco install rclone winfsp -y
+        shell: powershell
+
+      - name: Configure and Mount Rclone to H:\
+        env:
+          ENGINE_TOKEN_RAW: ${{ secrets.G_DRIVE_TOKEN_ENGINE }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        run: |
+          mkdir -p $env:USERPROFILE\.config\rclone
+          $E_ACCESS = ($env:ENGINE_TOKEN_RAW | ConvertFrom-Json).token
+          $E_REFRESH = ($env:ENGINE_TOKEN_RAW | ConvertFrom-Json).refresh_token
+          $E_EXPIRY = ($env:ENGINE_TOKEN_RAW | ConvertFrom-Json).expiry
+          $ENGINE_TOKEN = "{`"access_token`":`"$E_ACCESS`",`"token_type`":`"Bearer`",`"refresh_token`":`"$E_REFRESH`",`"expiry`":`"$E_EXPIRY`"}"
+          
+          @"
+          [engine]
+          type = drive
+          client_id = $env:CLIENT_ID
+          client_secret = $env:CLIENT_SECRET
+          scope = drive
+          token = $ENGINE_TOKEN
+          "@ | Out-File -FilePath "$env:USERPROFILE\.config\rclone\rclone.conf" -Encoding utf8
+          
+          Start-Process -FilePath "rclone" -ArgumentList "mount engine: H: --vfs-cache-mode writes --network-mode" -NoNewWindow
+          Start-Sleep -Seconds 5
+        shell: powershell
+
       - name: Download and Run Ngrok
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_TOKEN }}
