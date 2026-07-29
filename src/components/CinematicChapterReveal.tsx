@@ -228,6 +228,9 @@ export const CinematicChapterReveal: React.FC<ChapterRevealProps> = ({
               </AbsoluteFill>
             }
           >
+          <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+          
+          <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
 
           <div style={{
             position: "absolute",
@@ -245,7 +248,7 @@ export const CinematicChapterReveal: React.FC<ChapterRevealProps> = ({
           {leftAssetUrl && (
             <div style={{ 
               position: "absolute", 
-              transform: `translateX(${interpolate(flankSpring, [0, 1], [-800, -350])}px) translateY(${Math.sin(frame / 20) * 30}px) scale(${perpetualScale})`, 
+              transform: `translateX(${interpolate(flankSpring, [0, 1], [-900, -550])}px) translateY(${Math.sin(frame / 20) * 30}px) scale(${perpetualScale})`, 
               zIndex: 1, 
               opacity: interpolate(flankSpring, [0, 0.5], [0, 0.75]),
               mixBlendMode: "overlay"
@@ -253,7 +256,7 @@ export const CinematicChapterReveal: React.FC<ChapterRevealProps> = ({
               <Img 
                 src={staticFile(leftAssetUrl)} 
                 style={{ 
-                  width: "1200px", 
+                  width: "750px", 
                   height: "auto", 
                   WebkitMaskImage: "radial-gradient(circle at center, black 10%, transparent 65%)",
                   filter: "grayscale(100%) sepia(80%) hue-rotate(320deg) contrast(150%) brightness(0.8)" 
@@ -264,7 +267,7 @@ export const CinematicChapterReveal: React.FC<ChapterRevealProps> = ({
           {rightAssetUrl && (
             <div style={{ 
               position: "absolute", 
-              transform: `translateX(${interpolate(flankSpring, [0, 1], [800, 350])}px) translateY(${Math.cos(frame / 25) * 30}px) scale(${perpetualScale})`, 
+              transform: `translateX(${interpolate(flankSpring, [0, 1], [900, 550])}px) translateY(${Math.cos(frame / 25) * 30}px) scale(${perpetualScale})`, 
               zIndex: 1, 
               opacity: interpolate(flankSpring, [0, 0.5], [0, 0.75]),
               mixBlendMode: "overlay"
@@ -272,7 +275,7 @@ export const CinematicChapterReveal: React.FC<ChapterRevealProps> = ({
               <Img 
                 src={staticFile(rightAssetUrl)} 
                 style={{ 
-                  width: "1200px", 
+                  width: "750px", 
                   height: "auto", 
                   WebkitMaskImage: "radial-gradient(circle at center, black 10%, transparent 65%)",
                   filter: "grayscale(100%) sepia(80%) hue-rotate(320deg) contrast(150%) brightness(0.8)" 
@@ -360,6 +363,9 @@ export const CinematicChapterReveal: React.FC<ChapterRevealProps> = ({
             opacity: 0.6, mixBlendMode: "screen", pointerEvents: "none", zIndex: 100
           }} />
 
+          </AbsoluteFill>
+
+          </AbsoluteFill>
           </CinematicTextureWrapper>
 
         </AbsoluteFill>
