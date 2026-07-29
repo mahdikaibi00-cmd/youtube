@@ -2,8 +2,8 @@ name: Auto-Pilot Dispatcher
 
 on:
   schedule:
-    - cron: '40 16 * * *'
     - cron: '40 17 * * *'
+    - cron: '40 07 * * *'
   workflow_dispatch:
     inputs:
       force_channel:
@@ -12,8 +12,8 @@ on:
         type: choice
         options:
           - ""
-          - "Grid Hardened"
           - "Brew-Fi"
+          - "Grid Hardened"
 
 jobs:
   dispatch:
@@ -27,10 +27,10 @@ jobs:
             echo "channel=$FORCE" >> $GITHUB_OUTPUT
           else
             CRON="${{ github.event.schedule }}"
-            if [ "$CRON" = "40 16 * * *" ]; then
-              echo "channel=Grid Hardened" >> $GITHUB_OUTPUT
-            else
+            if [ "$CRON" = "40 17 * * *" ]; then
               echo "channel=Brew-Fi" >> $GITHUB_OUTPUT
+            else
+              echo "channel=Grid Hardened" >> $GITHUB_OUTPUT
             fi
           fi
 
