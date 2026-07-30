@@ -17,7 +17,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install playwright playwright-stealth
+          pip install playwright playwright-stealth seleniumbase
           playwright install chromium
 
       - name: Setup Ngrok RDP
@@ -27,6 +27,17 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
           net user MahdiAdmin Mhdmstr123@ /add
           net localgroup Administrators MahdiAdmin /add
+          
+          $batContent = @"
+          @echo off
+          echo [*] Mounting Google Drive to Z:\...
+          start /b rclone --config `"C:\Users\runneradmin\.config\rclone\rclone.conf`" mount engine: Z: --vfs-cache-mode writes --network-mode
+          timeout /t 5
+          echo [*] Launching Gemini Setup...
+          python `"Z:\Colab_AutoVideoCreator\setup_gemini_cookies.py`"
+          pause
+          "@
+          Out-File -FilePath "C:\Users\Public\Desktop\1_Run_Gemini_Setup.bat" -InputObject $batContent -Encoding utf8
         shell: powershell
 
       - name: Install Rclone & WinFsp
