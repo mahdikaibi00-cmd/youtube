@@ -15,4 +15,4 @@ Config.setHardwareAcceleration('if-possible');
 // Config.setCrf(16); // DISABLED - breaks NVENC
 Config.setPixelFormat('yuv420p');Config.setDelayRenderTimeoutInMilliseconds(120000);
 
-Config.overrideFfmpegCommand((command) => [...command, '-bf', '0']);
+Config.overrideFfmpegCommand(({ args }) => [...args, '-bf', '0']);
