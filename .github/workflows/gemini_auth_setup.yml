@@ -31,13 +31,13 @@ jobs:
           $batContent = @"
           @echo off
           echo [*] Mounting Google Drive to Z:\...
-          start /b rclone --config `"C:\Users\runneradmin\.config\rclone\rclone.conf`" mount engine: Z: --vfs-cache-mode writes --network-mode
+          start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: Z: --vfs-cache-mode writes --network-mode
           timeout /t 5
           echo [*] Launching Gemini Setup...
           python `"Z:\Colab_AutoVideoCreator\setup_gemini_cookies.py`"
           pause
           "@
-          Out-File -FilePath "C:\Users\Public\Desktop\1_Run_Gemini_Setup.bat" -InputObject $batContent -Encoding utf8
+          Out-File -FilePath "C:\Users\Public\Desktop\1_Run_Gemini_Setup.bat" -InputObject $batContent -Encoding ascii
         shell: powershell
 
       - name: Install Rclone & WinFsp
@@ -64,6 +64,8 @@ jobs:
           scope = drive
           token = $ENGINE_TOKEN
           "@ | Out-File -FilePath "$env:USERPROFILE\.config\rclone\rclone.conf" -Encoding utf8
+          
+          Copy-Item -Path "$env:USERPROFILE\.config\rclone\rclone.conf" -Destination "C:\Users\Public\rclone.conf" -Force
           
           Start-Process -FilePath "rclone" -ArgumentList "mount engine: H: --vfs-cache-mode writes --network-mode" -NoNewWindow
           Start-Sleep -Seconds 5
