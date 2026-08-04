@@ -17,8 +17,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install playwright playwright-stealth seleniumbase
-          playwright install chromium
+          python -m pip install playwright playwright-stealth seleniumbase
+          python -m playwright install chromium
 
       - name: Setup Ngrok RDP
         run: |
