@@ -1,4 +1,4 @@
-name: ChatGPT Cloud Auth Setup
+name: Cloud Auth Setup (Gemini & ChatGPT)
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
           python -m pip install playwright playwright-stealth seleniumbase
           python -m playwright install chromium
 
-      - name: Setup Ngrok RDP
+      - name: Setup Ngrok RDP & Desktop Scripts
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
@@ -28,7 +28,20 @@ jobs:
           net user "Mahdi Kaibi" "${{ secrets.RDP_PASSWORD }}" /add
           net localgroup Administrators "Mahdi Kaibi" /add
           
-          $batContent = @"
+          $batContentGemini = @"
+          @echo off
+          echo [*] Mounting Google Drive to H:\...
+          start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: H: --vfs-cache-mode writes --network-mode
+          timeout /t 5
+          echo [*] Installing dependencies for RDP user...
+          python -m pip install seleniumbase
+          echo [*] Launching Gemini Setup...
+          python `"H:\Colab_AutoVideoCreator\setup_gemini_cookies.py`"
+          pause
+          "@
+          Out-File -FilePath "C:\Users\Public\Desktop\1_Run_Gemini_Setup.bat" -InputObject $batContentGemini -Encoding ascii
+          
+          $batContentChatGPT = @"
           @echo off
           echo [*] Mounting Google Drive to H:\...
           start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: H: --vfs-cache-mode writes --network-mode
@@ -39,7 +52,7 @@ jobs:
           python `"H:\Colab_AutoVideoCreator\setup_chatgpt_cookies.py`"
           pause
           "@
-          Out-File -FilePath "C:\Users\Public\Desktop\1_Run_ChatGPT_Setup.bat" -InputObject $batContent -Encoding ascii
+          Out-File -FilePath "C:\Users\Public\Desktop\2_Run_ChatGPT_Setup.bat" -InputObject $batContentChatGPT -Encoding ascii
         shell: powershell
 
       - name: Install Rclone & WinFsp
