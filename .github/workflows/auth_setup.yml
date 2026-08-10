@@ -57,7 +57,7 @@ jobs:
           $pyTestGeminiProfile = @"
           import os, time, zipfile, shutil
           from seleniumbase import SB
-          profile_zip = r'H:\Colab_AutoVideoCreator\engine_auth\gemini_profile.zip'
+          profile_zip = r'H:\Colab_AutoVideoCreator\gemini_profile.zip'
           extract_dir = r'C:\temp_profile'
           print('[*] Extracting profile from:', profile_zip)
           if not os.path.exists(profile_zip):
@@ -91,7 +91,7 @@ jobs:
           $pyTestGeminiCookies = @"
           import os, time, json
           from seleniumbase import SB
-          cookies_file = r'H:\Colab_AutoVideoCreator\engine_auth\gemini_cookies.json'
+          cookies_file = r'H:\Colab_AutoVideoCreator\gemini_cookies.json'
           print('[*] Loading cookies from:', cookies_file)
           if not os.path.exists(cookies_file):
               print('[!] Cookies file not found!')
@@ -130,7 +130,7 @@ jobs:
           $pyTestChatGptCookies = @"
           import os, time, json
           from seleniumbase import SB
-          cookies_file = r'H:\Colab_AutoVideoCreator\engine_auth\chatgpt_cookies.json'
+          cookies_file = r'H:\Colab_AutoVideoCreator\chatgpt_cookies.json'
           print('[*] Loading cookies from:', cookies_file)
           if not os.path.exists(cookies_file):
               print('[!] Cookies file not found!')
