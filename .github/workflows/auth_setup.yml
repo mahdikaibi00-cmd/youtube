@@ -55,42 +55,42 @@ jobs:
           Out-File -FilePath "C:\Users\Public\Desktop\2_Run_ChatGPT_Setup.bat" -InputObject $batContentChatGPT -Encoding ascii
           
           $batTestGeminiProfile = @"
-@echo off
-echo [*] Mounting Google Drive to H:\...
-start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: H: --vfs-cache-mode writes --network-mode
-timeout /t 5
-echo [*] Installing dependencies for RDP user...
-python -m pip install seleniumbase
-echo [*] Testing Gemini Profile Auth...
-python `"H:\Colab_AutoVideoCreator\test_gemini_profile.py`"
-pause
-"@
+          @echo off
+          echo [*] Mounting Google Drive to H:\...
+          start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: H: --vfs-cache-mode writes --network-mode
+          timeout /t 5
+          echo [*] Installing dependencies for RDP user...
+          python -m pip install seleniumbase
+          echo [*] Testing Gemini Profile Auth...
+          python `"H:\Colab_AutoVideoCreator\test_gemini_profile.py`"
+          pause
+          "@
           Out-File -FilePath "C:\Users\Public\Desktop\3_Test_Gemini_Profile.bat" -InputObject $batTestGeminiProfile -Encoding ascii
           
           $batTestGeminiCookies = @"
-@echo off
-echo [*] Mounting Google Drive to H:\...
-start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: H: --vfs-cache-mode writes --network-mode
-timeout /t 5
-echo [*] Installing dependencies for RDP user...
-python -m pip install seleniumbase
-echo [*] Testing Gemini Cookies Auth...
-python `"H:\Colab_AutoVideoCreator\test_gemini_cookies.py`"
-pause
-"@
+          @echo off
+          echo [*] Mounting Google Drive to H:\...
+          start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: H: --vfs-cache-mode writes --network-mode
+          timeout /t 5
+          echo [*] Installing dependencies for RDP user...
+          python -m pip install seleniumbase
+          echo [*] Testing Gemini Cookies Auth...
+          python `"H:\Colab_AutoVideoCreator\test_gemini_cookies.py`"
+          pause
+          "@
           Out-File -FilePath "C:\Users\Public\Desktop\4_Test_Gemini_Cookies.bat" -InputObject $batTestGeminiCookies -Encoding ascii
 
           $batTestChatGptCookies = @"
-@echo off
-echo [*] Mounting Google Drive to H:\...
-start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: H: --vfs-cache-mode writes --network-mode
-timeout /t 5
-echo [*] Installing dependencies for RDP user...
-python -m pip install seleniumbase
-echo [*] Testing ChatGPT Cookies Auth...
-python `"H:\Colab_AutoVideoCreator\test_chatgpt_cookies.py`"
-pause
-"@
+          @echo off
+          echo [*] Mounting Google Drive to H:\...
+          start /b rclone --config `"C:\Users\Public\rclone.conf`" mount engine: H: --vfs-cache-mode writes --network-mode
+          timeout /t 5
+          echo [*] Installing dependencies for RDP user...
+          python -m pip install seleniumbase
+          echo [*] Testing ChatGPT Cookies Auth...
+          python `"H:\Colab_AutoVideoCreator\test_chatgpt_cookies.py`"
+          pause
+          "@
           Out-File -FilePath "C:\Users\Public\Desktop\5_Test_ChatGPT_Cookies.bat" -InputObject $batTestChatGptCookies -Encoding ascii
         shell: powershell
 
