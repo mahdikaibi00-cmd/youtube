@@ -55,116 +55,116 @@ jobs:
           Out-File -FilePath "C:\Users\Public\Desktop\2_Run_ChatGPT_Setup.bat" -InputObject $batContentChatGPT -Encoding ascii
           
           $pyTestGeminiProfile = @"
-          import os, time, zipfile, shutil
-          from seleniumbase import SB
-          profile_zip = r'H:\Colab_AutoVideoCreator\gemini_profile.zip'
-          extract_dir = r'C:\temp_profile'
-          print('[*] Extracting profile from:', profile_zip)
-          if not os.path.exists(profile_zip):
-              print('[!] Profile ZIP not found!')
-              exit(1)
-          if os.path.exists(extract_dir):
-              shutil.rmtree(extract_dir)
-          os.makedirs(extract_dir)
-          with zipfile.ZipFile(profile_zip, 'r') as zip_ref:
-              zip_ref.extractall(extract_dir)
-          print('[*] Launching browser with extracted profile...')
-          with SB(uc=True, headless=False, user_data_dir=extract_dir) as sb:
-              sb.open('https://gemini.google.com/app')
-              time.sleep(10)
-              if 'Sign in' in sb.get_page_source() or sb.get_current_url().startswith('https://accounts.google.com'):
-                  print('\n[!] PROFILE TEST FAILED: Browser is asking for login.\n')
-              else:
-                  print('\n[+] PROFILE TEST PASSED: Successfully loaded Gemini chat!\n')
-          "@
-          $pyTestGeminiProfile = $pyTestGeminiProfile -replace '(?m)^ {10}', ''
+import os, time, zipfile, shutil
+from seleniumbase import SB
+profile_zip = r'H:\Colab_AutoVideoCreator\gemini_profile.zip'
+extract_dir = r'C:\temp_profile'
+print('[*] Extracting profile from:', profile_zip)
+if not os.path.exists(profile_zip):
+    print('[!] Profile ZIP not found!')
+    exit(1)
+if os.path.exists(extract_dir):
+    try:
+        shutil.rmtree(extract_dir)
+    except:
+        pass
+os.makedirs(extract_dir, exist_ok=True)
+with zipfile.ZipFile(profile_zip, 'r') as zip_ref:
+    zip_ref.extractall(extract_dir)
+print('[*] Launching browser with extracted profile...')
+with SB(uc=True, headless=False, user_data_dir=extract_dir) as sb:
+    sb.open('https://gemini.google.com/app')
+    time.sleep(10)
+    if 'Sign in' in sb.get_page_source() or sb.get_current_url().startswith('https://accounts.google.com'):
+        print('\n[!] PROFILE TEST FAILED: Browser is asking for login.\n')
+    else:
+        print('\n[+] PROFILE TEST PASSED: Successfully loaded Gemini chat!\n')
+"@
           Out-File -FilePath "C:\Users\Public\Desktop\test_gemini_profile.py" -InputObject $pyTestGeminiProfile -Encoding utf8
           
           $batTestGeminiProfile = @"
-          @echo off
-          echo [*] Testing Gemini Profile Auth...
-          python `"C:\Users\Public\Desktop\test_gemini_profile.py`"
-          pause
-          "@
+@echo off
+echo [*] Testing Gemini Profile Auth...
+python "C:\Users\Public\Desktop\test_gemini_profile.py"
+pause
+"@
           Out-File -FilePath "C:\Users\Public\Desktop\3_Test_Gemini_Profile.bat" -InputObject $batTestGeminiProfile -Encoding ascii
           
           $pyTestGeminiCookies = @"
-          import os, time, json
-          from seleniumbase import SB
-          cookies_file = r'H:\Colab_AutoVideoCreator\gemini_cookies.json'
-          print('[*] Loading cookies from:', cookies_file)
-          if not os.path.exists(cookies_file):
-              print('[!] Cookies file not found!')
-              exit(1)
-          with open(cookies_file, 'r') as f:
-              cookies = json.load(f)
-          print('[*] Launching browser and injecting cookies...')
-          with SB(uc=True, headless=False) as sb:
-              sb.open('https://google.com')
-              time.sleep(2)
-              for c in cookies:
-                  vc = {k: v for k, v in c.items() if k in ['name', 'value', 'domain', 'path', 'httpOnly', 'secure']}
-                  try:
-                      sb.driver.add_cookie(vc)
-                  except:
-                      pass
-              print('[*] Cookies injected. Navigating to Gemini...')
-              sb.open('https://gemini.google.com/app')
-              time.sleep(10)
-              if 'Sign in' in sb.get_page_source() or sb.get_current_url().startswith('https://accounts.google.com'):
-                  print('\n[!] COOKIES TEST FAILED: Browser is asking for login.\n')
-              else:
-                  print('\n[+] COOKIES TEST PASSED: Successfully loaded Gemini chat!\n')
-          "@
-          $pyTestGeminiCookies = $pyTestGeminiCookies -replace '(?m)^ {10}', ''
+import os, time, json
+from seleniumbase import SB
+cookies_file = r'H:\Colab_AutoVideoCreator\gemini_cookies.json'
+print('[*] Loading cookies from:', cookies_file)
+if not os.path.exists(cookies_file):
+    print('[!] Cookies file not found!')
+    exit(1)
+with open(cookies_file, 'r') as f:
+    cookies = json.load(f)
+print('[*] Launching browser and injecting cookies...')
+with SB(uc=True, headless=False) as sb:
+    sb.open('https://google.com')
+    time.sleep(2)
+    for c in cookies:
+        vc = {k: v for k, v in c.items() if k in ['name', 'value', 'domain', 'path', 'httpOnly', 'secure']}
+        try:
+            sb.driver.add_cookie(vc)
+        except:
+            pass
+    print('[*] Cookies injected. Navigating to Gemini...')
+    sb.open('https://gemini.google.com/app')
+    time.sleep(10)
+    if 'Sign in' in sb.get_page_source() or sb.get_current_url().startswith('https://accounts.google.com'):
+        print('\n[!] COOKIES TEST FAILED: Browser is asking for login.\n')
+    else:
+        print('\n[+] COOKIES TEST PASSED: Successfully loaded Gemini chat!\n')
+"@
           Out-File -FilePath "C:\Users\Public\Desktop\test_gemini_cookies.py" -InputObject $pyTestGeminiCookies -Encoding utf8
           
           $batTestGeminiCookies = @"
-          @echo off
-          echo [*] Testing Gemini Cookies Auth...
-          python `"C:\Users\Public\Desktop\test_gemini_cookies.py`"
-          pause
-          "@
+@echo off
+echo [*] Testing Gemini Cookies Auth...
+python "C:\Users\Public\Desktop\test_gemini_cookies.py"
+pause
+"@
           Out-File -FilePath "C:\Users\Public\Desktop\4_Test_Gemini_Cookies.bat" -InputObject $batTestGeminiCookies -Encoding ascii
 
           $pyTestChatGptCookies = @"
-          import os, time, json
-          from seleniumbase import SB
-          cookies_file = r'H:\Colab_AutoVideoCreator\chatgpt_cookies.json'
-          print('[*] Loading cookies from:', cookies_file)
-          if not os.path.exists(cookies_file):
-              print('[!] Cookies file not found!')
-              exit(1)
-          with open(cookies_file, 'r') as f:
-              cookies = json.load(f)
-          print('[*] Launching browser and injecting cookies...')
-          with SB(uc=True, headless=False) as sb:
-              sb.open('https://chatgpt.com')
-              time.sleep(2)
-              for c in cookies:
-                  vc = {k: v for k, v in c.items() if k in ['name', 'value', 'domain', 'path', 'httpOnly', 'secure']}
-                  try:
-                      sb.driver.add_cookie(vc)
-                  except:
-                      pass
-              print('[*] Cookies injected. Refreshing ChatGPT...')
-              sb.open('https://chatgpt.com')
-              time.sleep(10)
-              page_text = sb.get_page_source()
-              if 'Log in' in page_text or 'Sign up' in page_text or sb.get_current_url() == 'https://chatgpt.com/auth/login':
-                  print('\n[!] COOKIES TEST FAILED: Browser is asking for login.\n')
-              else:
-                  print('\n[+] COOKIES TEST PASSED: Successfully loaded ChatGPT interface!\n')
-          "@
-          $pyTestChatGptCookies = $pyTestChatGptCookies -replace '(?m)^ {10}', ''
+import os, time, json
+from seleniumbase import SB
+cookies_file = r'H:\Colab_AutoVideoCreator\chatgpt_cookies.json'
+print('[*] Loading cookies from:', cookies_file)
+if not os.path.exists(cookies_file):
+    print('[!] Cookies file not found!')
+    exit(1)
+with open(cookies_file, 'r') as f:
+    cookies = json.load(f)
+print('[*] Launching browser and injecting cookies...')
+with SB(uc=True, headless=False) as sb:
+    sb.open('https://chatgpt.com')
+    time.sleep(2)
+    for c in cookies:
+        vc = {k: v for k, v in c.items() if k in ['name', 'value', 'domain', 'path', 'httpOnly', 'secure']}
+        try:
+            sb.driver.add_cookie(vc)
+        except:
+            pass
+    print('[*] Cookies injected. Refreshing ChatGPT...')
+    sb.open('https://chatgpt.com')
+    time.sleep(10)
+    page_text = sb.get_page_source()
+    if 'Log in' in page_text or 'Sign up' in page_text or sb.get_current_url() == 'https://chatgpt.com/auth/login':
+        print('\n[!] COOKIES TEST FAILED: Browser is asking for login.\n')
+    else:
+        print('\n[+] COOKIES TEST PASSED: Successfully loaded ChatGPT interface!\n')
+"@
           Out-File -FilePath "C:\Users\Public\Desktop\test_chatgpt_cookies.py" -InputObject $pyTestChatGptCookies -Encoding utf8
           
           $batTestChatGptCookies = @"
-          @echo off
-          echo [*] Testing ChatGPT Cookies Auth...
-          python `"C:\Users\Public\Desktop\test_chatgpt_cookies.py`"
-          pause
-          "@
+@echo off
+echo [*] Testing ChatGPT Cookies Auth...
+python "C:\Users\Public\Desktop\test_chatgpt_cookies.py"
+pause
+"@
           Out-File -FilePath "C:\Users\Public\Desktop\5_Test_ChatGPT_Cookies.bat" -InputObject $batTestChatGptCookies -Encoding ascii
         shell: powershell
 
