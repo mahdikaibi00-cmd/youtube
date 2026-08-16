@@ -16,7 +16,7 @@ imagehash
 undetected-chromedriver
 selenium
 pyperclip
-
+ddgs
 torchaudio
 soundfile
 
