@@ -10,11 +10,12 @@ import { GlassStatGrid } from './GlassStatGrid';
 // -----------------------------------------------------
 const NumberAnimator = ({ target, style, frame, fps, delay = 0 }: any) => {
     const activeFrame = Math.max(0, frame - delay);
+    const targetNum = Number(target) || 0;
     
     if (style === 'slot_machine') {
         const progress = spring({ frame: activeFrame, fps, config: { damping: 100, stiffness: 20 } });
-        const val = interpolate(progress, [0, 1], [0, target]);
-        const display = progress < 0.95 ? Math.floor(val + (Math.random() * 999)) : target;
+        const val = interpolate(progress, [0, 1], [0, targetNum]);
+        const display = progress < 0.95 ? Math.floor(val + (Math.random() * 999)) : targetNum;
         return <span>{display.toLocaleString()}</span>;
     } 
     
@@ -24,10 +25,10 @@ const NumberAnimator = ({ target, style, frame, fps, delay = 0 }: any) => {
             const gibberish = Array(target.toString().length).fill(0).map(() => Math.floor(Math.random() * 10)).join('');
             return <span>{gibberish}</span>;
         }
-        return <span>{target.toLocaleString()}</span>;
+        return <span>{targetNum.toLocaleString()}</span>;
     }
 
-    const val = Math.floor(interpolate(activeFrame, [0, 45], [0, target], { extrapolateRight: 'clamp' }));
+    const val = Math.floor(interpolate(activeFrame, [0, 45], [0, targetNum], { extrapolateRight: 'clamp' }));
     return <span>{val.toLocaleString()}</span>;
 };
 
@@ -187,14 +188,16 @@ const HolographicBlueprint = ({ dataPoints, frame, fps, color }: any) => {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
                 {dataPoints.map((dp: any, idx: number) => {
-                    const charsToShow = Math.floor(interpolate(frame - (idx * 10), [0, 20], [0, dp.value.length + dp.label.length], { extrapolateRight: 'clamp', extrapolateLeft: 'clamp' }));
-                    const fullText = `${dp.label}: ${dp.value}`;
+                    const labelStr = String(dp.label || '');
+                    const valStr = String(dp.value || '');
+                    const charsToShow = Math.floor(interpolate(frame - (idx * 10), [0, 20], [0, valStr.length + labelStr.length], { extrapolateRight: 'clamp', extrapolateLeft: 'clamp' }));
+                    const fullText = `${labelStr}: ${valStr}`;
                     const visibleText = fullText.substring(0, charsToShow);
                     return (
                         <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <span style={{ color: 'rgba(255,255,255,0.5)', fontFamily: '"Inter", sans-serif', fontSize: '16px', letterSpacing: '3px', textTransform: 'uppercase' }}>{dp.label}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.5)', fontFamily: '"Inter", sans-serif', fontSize: '16px', letterSpacing: '3px', textTransform: 'uppercase' }}>{labelStr}</span>
                             <span style={{ color: '#FFF', fontFamily: '"JetBrains Mono", "Courier New", monospace', fontSize: '28px', fontWeight: 600, textShadow: `0 0 20px ${color}80` }}>
-                                {dp.value.substring(0, Math.floor(interpolate(frame - (idx*10), [0, 20], [0, dp.value.length], {extrapolateRight: 'clamp'})))}
+                                {valStr.substring(0, Math.floor(interpolate(frame - (idx*10), [0, 20], [0, valStr.length], {extrapolateRight: 'clamp'})))}
                                 {charsToShow < fullText.length && charsToShow > 0 && <span style={{ backgroundColor: color, color: '#000' }}>_</span>}
                             </span>
                         </div>
@@ -271,9 +274,48 @@ export const MotionGraphicsRouter = ({ graphics, sceneIndex = 0, durationInFrame
   }
 
   if (type === 'dynamic3dcomparison' || type === 'dynamic_3d_comparison') {
-      // itemA and itemB carry their own start/end/title/subtitle/value/color
-      const patchedItemA = graphics.itemA ? { ...graphics.itemA, start: graphics.itemA.start ?? startFrame, end: graphics.itemA.end ?? durationInFrames } : { title: '', subtitle: '', value: 0, color: '#ff1a40', start: startFrame, end: durationInFrames };
-      const patchedItemB = graphics.itemB ? { ...graphics.itemB, start: graphics.itemB.start ?? (startFrame + 15), end: graphics.itemB.end ?? durationInFrames } : { title: '', subtitle: '', value: 0, color: '#00e6b8', start: startFrame + 15, end: durationInFrames };
+      // -----------------------------------------------------------------------
+      // ROBUST SCHEMA NORMALIZER
+      // The AI may produce several incompatible item shapes. We handle all of them:
+      //   Schema A (correct): { title, subtitle, value (number), color, start, end }
+      //   Schema B (AI v1):   { label, value (string like "675K MILES") }
+      //   Schema C (AI v2):   { name, stat (string like "ORIGINAL" / "800K") }
+      // We also guard against NaN / non-finite values that crash interpolate().
+      // -----------------------------------------------------------------------
+      const extractNumericValue = (raw: any): number => {
+          if (typeof raw === 'number' && isFinite(raw) && raw > 0) return raw;
+          if (typeof raw !== 'string') return 1;
+          // Remove commas, spaces, and trailing text — grab the first number-like token
+          const stripped = raw.replace(/,/g, '').replace(/k/gi, '000');
+          const match = stripped.match(/(\d+\.?\d*)/);
+          if (match) {
+              const n = parseFloat(match[1]);
+              if (isFinite(n) && n > 0) return n;
+          }
+          return 1; // non-parseable strings (e.g. "ORIGINAL") get value=1 so bars render
+      };
+
+      const normalizeItem = (raw: any, defaultColor: string, startOffset: number): any => {
+          if (!raw) return { title: '', subtitle: '', value: 1, color: defaultColor, start: startFrame + startOffset, end: durationInFrames };
+          // Determine the display title and subtitle from whichever fields exist
+          const title    = raw.title    ?? raw.label ?? raw.name   ?? '';
+          const subtitle = raw.subtitle ?? raw.stat  ?? raw.value  ?? '';
+          // Numeric value: prefer raw.value if numeric, otherwise parse stat or label
+          const numericValue = extractNumericValue(raw.value ?? raw.stat ?? raw.label ?? 1);
+          return {
+              title,
+              subtitle: typeof subtitle === 'string' ? subtitle : String(subtitle),
+              value:     numericValue,
+              color:     raw.color       ?? defaultColor,
+              imageUrl:  raw.imageUrl    ?? raw.local_path ?? undefined,
+              start:     raw.start       ?? startFrame + startOffset,
+              end:       raw.end         ?? durationInFrames,
+          };
+      };
+
+      const patchedItemA = normalizeItem(graphics.itemA, '#ff1a40', 0);
+      const patchedItemB = normalizeItem(graphics.itemB, '#00e6b8', 15);
+
       return (
           <AbsoluteFill style={{ pointerEvents: 'none', zIndex: 100 }}>
               <Dynamic3DComparison 
