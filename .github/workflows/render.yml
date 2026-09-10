@@ -51,7 +51,7 @@ jobs:
     if: inputs.action_type != 'RENDER_ONLY'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/mahdikaibi/videocreator-runner:v1.0
+      image: ghcr.io/mahdikaibi00-cmd/videocreator-runner:v1.0
     outputs:
       vault_name: ${{ steps.orchestrator.outputs.vault_name }}
       total_frames: ${{ steps.orchestrator.outputs.total_frames }}
@@ -218,7 +218,7 @@ jobs:
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY' && needs.creation_job.outputs.skip_tts != 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/mahdikaibi/videocreator-runner:v1.0
+      image: ghcr.io/mahdikaibi00-cmd/videocreator-runner:v1.0
     strategy:
       fail-fast: false
       matrix:
@@ -317,7 +317,7 @@ jobs:
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY' && needs.creation_job.outputs.skip_prep != 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/mahdikaibi/videocreator-runner:v1.0
+      image: ghcr.io/mahdikaibi00-cmd/videocreator-runner:v1.0
     steps:
       - uses: actions/checkout@v4
 
@@ -427,7 +427,7 @@ jobs:
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY' && needs.creation_job.outputs.skip_downloads != 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/mahdikaibi/videocreator-runner:v1.0
+      image: ghcr.io/mahdikaibi00-cmd/videocreator-runner:v1.0
     steps:
       - uses: actions/checkout@v4
 
@@ -506,7 +506,7 @@ jobs:
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY' && needs.creation_job.outputs.skip_downloads != 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/mahdikaibi/videocreator-runner:v1.0
+      image: ghcr.io/mahdikaibi00-cmd/videocreator-runner:v1.0
     strategy:
       fail-fast: false
       matrix:
@@ -651,7 +651,7 @@ jobs:
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY' && needs.creation_job.outputs.skip_downloads != 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/mahdikaibi/videocreator-runner:v1.0
+      image: ghcr.io/mahdikaibi00-cmd/videocreator-runner:v1.0
     strategy:
       fail-fast: false
       matrix:
@@ -743,7 +743,7 @@ jobs:
     if: always() && !cancelled() && !failure() && inputs.action_type != 'RENDER_ONLY'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/mahdikaibi/videocreator-runner:v1.0
+      image: ghcr.io/mahdikaibi00-cmd/videocreator-runner:v1.0
     steps:
       - uses: actions/checkout@v4
 
@@ -1030,7 +1030,7 @@ jobs:
     if: always() && !cancelled() && !failure()
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/mahdikaibi/videocreator-runner:v1.0
+      image: ghcr.io/mahdikaibi00-cmd/videocreator-runner:v1.0
     steps:
       - uses: actions/checkout@v4
 
