@@ -23,6 +23,7 @@ on:
         options:
           - Grid Hardened
           - Brew-Fi
+          - THE SENTINELS
       topic:
         description: 'Topic Name'
         required: false
