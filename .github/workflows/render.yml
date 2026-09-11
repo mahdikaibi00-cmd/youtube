@@ -23,7 +23,7 @@ on:
         options:
           - Grid Hardened
           - Brew-Fi
-          - THE SENTINELS
+          - Hardware Exposed
       topic:
         description: 'Topic Name'
         required: false
