@@ -24,7 +24,7 @@ on:
         options:
           - Grid Hardened
           - Brew-Fi
-          - Hardware Exposed
+          - Scenti-Fi
       topic:
         description: 'Topic Name'
         required: false
