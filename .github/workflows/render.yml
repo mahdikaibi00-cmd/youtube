@@ -19,10 +19,10 @@ on:
       channel_name:
         description: 'Channel to operate on'
         required: true
-        default: 'Grid Hardened'
+        default: 'Cosme-Fi'
         type: choice
         options:
-          - Grid Hardened
+          - Cosme-Fi
           - Brew-Fi
           - Scenti-Fi
       topic:
