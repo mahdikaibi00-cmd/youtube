@@ -2291,11 +2291,128 @@ export const Style11Scene: React.FC<{ scene: any, duration: number, isEven: bool
   );
 };
 
+/**
+ * YouTubeEvidenceScene
+ * Frames quoted third-party YouTube clips inside an attributed 16:9 evidence monitor
+ * over a dark editorial grid backdrop, keeping bottom space clear for captions.
+ */
+export const YouTubeEvidenceScene = ({ scene, duration, isEven }: { scene: any; duration: number; isEven: boolean }) => {
+  const frame = useCurrentFrame();
+  const safeDuration = Math.max(1, duration || 30);
+  const enterOpacity = interpolate(frame, [0, 10], [0, 1], { extrapolateRight: 'clamp' });
+  const enterScale = interpolate(frame, [0, 12], [0.97, 1], { extrapolateRight: 'clamp' });
+  const accentColor = scene.chapter_payload?.accentColor || scene.visual?.accentColor || '#D4AF37';
+
+  const rawChannel = String(
+    scene.youtube_metadata?.channel_name ||
+    scene.visual?.youtube_channel_name ||
+    ''
+  ).trim();
+  const formattedHandle = rawChannel
+    ? (rawChannel.startsWith('@') ? rawChannel : `@${rawChannel}`)
+    : '';
+  const sourceLabel = formattedHandle
+    ? `SOURCE: ${formattedHandle} • Critical Review`
+    : 'SOURCE: External Reference • Critical Review';
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: '#07090D', overflow: 'hidden' }}>
+      <AbsoluteFill
+        style={{
+          background: `radial-gradient(circle at 22% 18%, ${accentColor}26 0%, transparent 52%), radial-gradient(circle at 82% 84%, rgba(56, 189, 248, 0.14) 0%, transparent 52%), #07090D`,
+        }}
+      />
+      <AbsoluteFill
+        style={{
+          opacity: 0.18,
+          backgroundImage:
+            'linear-gradient(to right, rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px)',
+          backgroundSize: '48px 48px',
+        }}
+      />
+
+      <div
+        style={{
+          position: 'absolute',
+          top: '5.4%',
+          left: '13%',
+          width: '74%',
+          height: '74%',
+          borderRadius: '18px',
+          overflow: 'hidden',
+          border: '1px solid rgba(255, 255, 255, 0.18)',
+          boxShadow:
+            '0 32px 90px rgba(0, 0, 0, 0.88), 0 0 0 1px rgba(255, 255, 255, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.14)',
+          backgroundColor: '#0B0E15',
+          opacity: enterOpacity,
+          transform: `scale(${enterScale})`,
+        }}
+      >
+        <DualClipBackground scene={scene} duration={safeDuration} isEven={isEven} />
+
+        <div
+          style={{
+            position: 'absolute',
+            top: '22px',
+            left: '22px',
+            zIndex: 30,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '10px 20px',
+            borderRadius: '9999px',
+            backgroundColor: 'rgba(10, 12, 18, 0.82)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
+            color: 'rgba(255, 255, 255, 0.94)',
+            fontFamily: '"Inter", "Roboto", sans-serif',
+            fontSize: '18px',
+            fontWeight: 600,
+            letterSpacing: '0.02em',
+            pointerEvents: 'none',
+          }}
+        >
+          <span
+            style={{
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              backgroundColor: '#F59E0B',
+              flexShrink: 0,
+            }}
+          />
+          <span>{sourceLabel}</span>
+        </div>
+      </div>
+
+      <AbsoluteFill style={{ pointerEvents: 'none', mixBlendMode: 'screen', opacity: 0.22 }}>
+        <FilmGrain />
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
 export const LayoutRouter = ({ scene, duration, isEven }: any) => {
   const compStyle = scene.composition_style;
   const editingStyle = scene.editing_style;
   const layout = scene.layout?.toLowerCase() || 'hero';
   const mediaPaths = scene.media_paths || (scene.media_path ? [scene.media_path] : []);
+
+  const firstMedia = String(mediaPaths[0] || '').toLowerCase();
+  const isQuotedYouTube =
+    !scene.is_entity_synthesized &&
+    mediaPaths.length > 0 &&
+    (
+      scene.scene_type === 'youtube' ||
+      scene.visual?.scene_type === 'youtube' ||
+      firstMedia.includes('_youtube.mp4')
+    );
+
+  if (isQuotedYouTube) {
+    return <YouTubeEvidenceScene scene={scene} duration={duration} isEven={isEven} />;
+  }
   
   const getExt = (path: string) => path ? path.split('.').pop()?.toLowerCase() : '';
   const isVideo = (path: string) => ['mp4', 'mov', 'webm'].includes(getExt(path) || '');
