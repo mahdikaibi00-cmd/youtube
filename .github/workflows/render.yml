@@ -1071,7 +1071,8 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          pip install --no-cache-dir yt-dlp google-genai requests pillow numpy opencv-python-headless filelock
+          pip install --no-cache-dir yt-dlp google-genai requests pillow numpy opencv-python-headless filelock ddgs duckduckgo-search librosa playwright playwright-stealth
+          python -c 'import playwright' >/dev/null 2>&1 && { python -m playwright install chromium --with-deps >/dev/null 2>&1 || python -m playwright install chromium || true; } || true
 
       - name: Setup Node.js (For yt-dlp JS Runtime)
         uses: actions/setup-node@v4
