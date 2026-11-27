@@ -18,7 +18,7 @@ export const SafeImage: React.FC<SafeImageProps> = ({ src, style, onError, onLoa
   const isDataOrEmpty = !src || src.startsWith('data:') || src.trim() === '';
   const [handle] = useState<number | null>(() => {
     if (isDataOrEmpty) return null;
-    return delayRender(`SafeImage: ${src}`, { timeoutInMilliseconds: 4000 });
+    return delayRender(`SafeImage: ${src}`, { timeoutInMilliseconds: 15000 });
   });
   const [currentSrc, setCurrentSrc] = useState(src || TRANSPARENT_PIXEL);
   const unblocked = useRef(false);
@@ -39,10 +39,10 @@ export const SafeImage: React.FC<SafeImageProps> = ({ src, style, onError, onLoa
       return;
     }
 
-    // Safety fallback: unblock fast (1200ms) so frames never lag or freeze
+    // Safety fallback well inside Remotion's (15000 - 2000)ms window so frames never hang or race
     const timer = setTimeout(() => {
       unblock();
-    }, 1200);
+    }, 2500);
 
     return () => {
       clearTimeout(timer);

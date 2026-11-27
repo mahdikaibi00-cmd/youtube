@@ -334,7 +334,7 @@ export function useStudioCutoutImage(src: string): AnalyzedMediaResult {
 
     let cancelled = false;
     let done = false;
-    const handle = delayRender(`AppleGlassMedia: ${src}`, { timeoutInMilliseconds: 3500 });
+    const handle = delayRender(`AppleGlassMedia: ${src}`, { timeoutInMilliseconds: 15000 });
     const unblock = () => {
       if (!done) {
         done = true;
@@ -342,9 +342,10 @@ export function useStudioCutoutImage(src: string): AnalyzedMediaResult {
       }
     };
 
+    // Unblock well inside Remotion's (timeoutInMilliseconds - 2000ms) window so delayRender never races.
     const timer = setTimeout(() => {
       unblock();
-    }, 1500);
+    }, 3000);
 
     const img = new Image();
     if (/^https?:\/\//i.test(src) && !src.includes('localhost') && !src.includes('127.0.0.1')) {
