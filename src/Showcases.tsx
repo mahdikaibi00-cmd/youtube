@@ -9,6 +9,8 @@ import { GlobalFinisher } from './components/GlobalFinisher';
 import { KineticStack } from './components/KineticStack';
 import { OrganicCamera } from './components/OrganicCamera';
 import { AnimatedExplanation } from './components/AnimatedExplanation';
+import { YouTubeEvidenceScene } from './components/Layouts';
+import { CaptionDirector } from './components/CaptionDirector';
 
 export const AnimatedNumberShowcase = () => (
     <AbsoluteFill style={{ backgroundColor: '#111', justifyContent: 'center', alignItems: 'center' }}>
@@ -394,8 +396,37 @@ export const AnimatedExplanationSlotShowcase = () => (
     </AbsoluteFill>
 );
 
+export const YouTubeEvidenceShowcase: React.FC<{ variantIndex?: number }> = ({ variantIndex = 0 }) => {
+    const sampleScene = {
+        scene_id: 'scene_0000',
+        scene_type: 'youtube',
+        caption_preset: 'GlassPillCaption',
+        media_path: 'public/preview_clip.mp4',
+        media_paths: ['public/preview_clip.mp4'],
+        timing: { start_ms: 0, duration_ms: 5000 },
+        chapter_payload: { accentColor: '#F59E0B' },
+        youtube_metadata: { channel_name: 'Edward Smith' },
+        words: [
+            { word: 'Testing', start_ms: 0, end_ms: 400 },
+            { word: 'different', start_ms: 420, end_ms: 900 },
+            { word: 'cinema', start_ms: 920, end_ms: 1400 },
+            { word: 'frames', start_ms: 1420, end_ms: 2100 },
+            { word: 'clearly', start_ms: 2120, end_ms: 3000 },
+        ],
+    };
+    return (
+        <GlobalFinisher>
+            <AbsoluteFill style={{ backgroundColor: '#000' }}>
+                <YouTubeEvidenceScene scene={sampleScene} duration={150} isEven={true} variantOverride={variantIndex} />
+                <CaptionDirector scene={sampleScene} />
+            </AbsoluteFill>
+        </GlobalFinisher>
+    );
+};
+
 export const ShowcaseRegistry = () => (
     <>
+        <Composition id="Preview-YouTubeEvidence" component={YouTubeEvidenceShowcase} durationInFrames={150} fps={30} width={2560} height={1333} defaultProps={{ variantIndex: 0 }} />
         <Composition id="Preview-AnimatedExplanation-Honeycomb" component={AnimatedExplanationHoneycombShowcase} durationInFrames={180} fps={30} width={2560} height={1333} />
         <Composition id="Preview-AnimatedExplanation-Slot" component={AnimatedExplanationSlotShowcase} durationInFrames={150} fps={30} width={2560} height={1333} />
         <Composition id="Preview-Floating3DCards" component={Floating3DCardsShowcase} durationInFrames={240} fps={30} width={2560} height={1333} />

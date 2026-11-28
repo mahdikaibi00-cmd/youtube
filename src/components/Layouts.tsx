@@ -56,11 +56,119 @@ export const KenBurnsMedia: React.FC<{ src: string, type: 'video' | 'image', dur
 };
 
 
+const isVideoFilePath = (p: string): boolean => {
+  const lower = p.toLowerCase();
+  return lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm');
+};
+
+/**
+ * RawClipSequence
+ * Shared timeline clip renderer (media_trims + legacy clip_cut_ms fallback).
+ * Reused by DualClipBackground (with OrganicCamera + texture LUT) and
+ * YouTubeEvidenceScene's live abstract color backdrop (raw muted frames).
+ */
+const RawClipSequence: React.FC<{
+  scene: any;
+  duration: number;
+  isEven: boolean;
+  style?: React.CSSProperties;
+  useOrganicCamera?: boolean;
+}> = ({ scene, duration, isEven, style = {}, useOrganicCamera = true }) => {
+  const { fps } = useVideoConfig();
+  const mediaPaths: string[] = scene.media_paths || (scene.media_path ? [scene.media_path] : []);
+  const mediaTrims: any[] = scene.media_trims || [];
+
+  if (mediaPaths.length === 0) return null;
+
+  const renderClipNode = (path: string, clipDur: number, clipEven: boolean, startFrameOffset = 0) => {
+    const resolvedSrc = staticFile(path);
+    const clipType = isVideoFilePath(path) ? 'video' : 'image';
+    if (useOrganicCamera) {
+      return (
+        <KenBurnsMedia
+          src={resolvedSrc}
+          type={clipType}
+          duration={clipDur}
+          isEven={clipEven}
+          style={style}
+          startFromFrame={startFrameOffset}
+        />
+      );
+    }
+    const rawStyle: React.CSSProperties = {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      objectFit: 'cover',
+      ...style,
+    };
+    const endAtFrame = startFrameOffset + clipDur;
+    return clipType === 'video' ? (
+      <OffthreadVideo
+        src={resolvedSrc}
+        style={rawStyle}
+        startFrom={startFrameOffset}
+        endAt={endAtFrame}
+        muted
+        onError={(e) => console.log('Media playback error caught on Video:', e)}
+      />
+    ) : (
+      <RemotionImg src={resolvedSrc} style={rawStyle} />
+    );
+  };
+
+  if (mediaTrims.length > 0 && mediaTrims.length === mediaPaths.length) {
+    let accumulatedFrames = 0;
+    return (
+      <>
+        {mediaPaths.map((path, idx) => {
+          const trim = mediaTrims[idx];
+          const startFrameOffset = Math.max(0, Math.round((trim.start_ms / 1000) * fps));
+          const isLast = idx === mediaPaths.length - 1;
+          const playDurationFrames = isLast
+            ? Math.max(1, duration - accumulatedFrames)
+            : Math.max(1, Math.round((trim.play_duration_ms / 1000) * fps));
+          const currentStart = accumulatedFrames;
+          accumulatedFrames += playDurationFrames;
+
+          return (
+            <Sequence key={idx} from={currentStart} durationInFrames={playDurationFrames}>
+              {renderClipNode(path, playDurationFrames, idx % 2 === 0 ? isEven : !isEven, startFrameOffset)}
+            </Sequence>
+          );
+        })}
+      </>
+    );
+  }
+
+  const clip_cut_ms: number = scene.clip_cut_ms || 0;
+  const path1 = mediaPaths[0] || '';
+  const path2 = mediaPaths[1] || '';
+
+  if (!path2 || clip_cut_ms <= 0) {
+    return path1 ? renderClipNode(path1, duration, isEven, 0) : null;
+  }
+
+  const cutFrame = Math.round((clip_cut_ms / 1000) * fps);
+  return (
+    <>
+      <Sequence from={0} durationInFrames={Math.max(1, cutFrame)}>
+        {renderClipNode(path1, cutFrame, isEven, 0)}
+      </Sequence>
+      <Sequence from={cutFrame} durationInFrames={Math.max(1, duration - cutFrame)}>
+        {renderClipNode(path2, Math.max(1, duration - cutFrame), !isEven, 0)}
+      </Sequence>
+    </>
+  );
+};
+
 /**
  * DualClipBackground
  * Renders one or two background video clips for a scene.
- * When two clips are provided, clip1 plays from frame 0 â†’ cutFrame,
- * clip2 plays from cutFrame â†’ end, with a 2-frame hard cut (no crossfade needed â€”
+ * When two clips are provided, clip1 plays from frame 0 -> cutFrame,
+ * clip2 plays from cutFrame -> end, with a 2-frame hard cut (no crossfade needed --
  * the cut lands on a natural breath/silence point detected in Python).
  */
 export const DualClipBackground: React.FC<{
@@ -69,75 +177,17 @@ export const DualClipBackground: React.FC<{
   isEven: boolean;
   style?: React.CSSProperties;
 }> = ({ scene, duration, isEven, style = {} }) => {
-  const { fps } = useVideoConfig();
   const mediaPaths: string[] = scene.media_paths || (scene.media_path ? [scene.media_path] : []);
-  const mediaTrims: any[] = scene.media_trims || [];
-
   if (mediaPaths.length === 0) return null;
-
-  // New Pro Pipeline: Array of mathematically precise clips!
-  if (mediaTrims.length > 0 && mediaTrims.length === mediaPaths.length) {
-    let accumulatedFrames = 0;
-    
-    return (
-      <CinematicTextureWrapper
-        particleSrc={scene.effects_theme === 'dust' || scene.effects_theme === 'embers' ? staticFile('assets/particles_dust.mp4') : undefined}
-        backgroundLayer={
-          <>
-            {mediaPaths.map((path, idx) => {
-              const trim = mediaTrims[idx];
-              const startFrameOffset = Math.max(0, Math.round((trim.start_ms / 1000) * fps));
-              
-              // Last clip fills exactly the remaining duration to prevent math jitter
-              const isLast = idx === mediaPaths.length - 1;
-              const playDurationFrames = isLast 
-                ? Math.max(1, duration - accumulatedFrames) 
-                : Math.max(1, Math.round((trim.play_duration_ms / 1000) * fps));
-                
-              const currentStart = accumulatedFrames;
-              accumulatedFrames += playDurationFrames;
-              
-              return (
-                <Sequence key={idx} from={currentStart} durationInFrames={playDurationFrames}>
-                  <KenBurnsMedia src={staticFile(path)} type={path.endsWith('.mp4') ? 'video' : 'image'} duration={playDurationFrames} isEven={idx % 2 === 0 ? isEven : !isEven} style={style} startFromFrame={startFrameOffset} />
-                </Sequence>
-              );
-            })}
-          </>
-        }
-      />
-    );
-  }
-
-  // Legacy fallback (before non-destructive update)
-  const clip_cut_ms: number  = scene.clip_cut_ms || 0;
-  const path1 = mediaPaths[0] ? staticFile(mediaPaths[0]) : '';
-  const path2 = mediaPaths[1] ? staticFile(mediaPaths[1]) : '';
-
-  if (!path2 || clip_cut_ms <= 0) {
-    return path1 ? (
-      <CinematicTextureWrapper
-        particleSrc={scene.effects_theme === 'dust' || scene.effects_theme === 'embers' ? staticFile('assets/particles_dust.mp4') : undefined}
-        backgroundLayer={<KenBurnsMedia src={path1} type="video" duration={duration} isEven={isEven} style={style} />}
-      />
-    ) : null;
-  }
-
-  const cutFrame = Math.round((clip_cut_ms / 1000) * fps);
 
   return (
     <CinematicTextureWrapper
-      particleSrc={scene.effects_theme === 'dust' || scene.effects_theme === 'embers' ? staticFile('assets/particles_dust.mp4') : undefined}
-      backgroundLayer={
-        <>
-          <Sequence from={0} durationInFrames={Math.max(1, cutFrame)}>
-            <KenBurnsMedia src={path1} type="video" duration={cutFrame} isEven={isEven} style={style} />
-          </Sequence>
-          <Sequence from={cutFrame} durationInFrames={Math.max(1, duration - cutFrame)}>
-            <KenBurnsMedia src={path2} type="video" duration={Math.max(1, duration - cutFrame)} isEven={!isEven} style={style} />
-          </Sequence>
-        </>
+      particleSrc={
+        scene.effects_theme === 'dust' || scene.effects_theme === 'embers'
+          ? staticFile('assets/particles_dust.mp4')
+          : undefined
       }
+      backgroundLayer={<RawClipSequence scene={scene} duration={duration} isEven={isEven} style={style} useOrganicCamera={true} />}
     />
   );
 };
@@ -2291,103 +2341,633 @@ export const Style11Scene: React.FC<{ scene: any, duration: number, isEven: bool
   );
 };
 
+interface YouTubeVariantSpec {
+  id: string;
+  top: string;
+  left: string;
+  width: string;
+  height: string;
+  radius: number;
+  border: string;
+  boxShadow: string;
+  ambientStyle: (frame: number, dur: number) => React.CSSProperties;
+  scrim: (accent: string, frame: number, dur: number) => React.CSSProperties;
+  hasFineGrid?: boolean;
+  hasFloorGlow?: boolean;
+  motionType: 'zoom' | 'slideLeft' | 'slideRight' | 'rise' | 'tiltPos' | 'tiltNeg';
+  sourcePos:
+    | 'inner_top_left'
+    | 'inner_top_right'
+    | 'inner_bottom_left'
+    | 'inner_bottom_right'
+    | 'margin_right'
+    | 'margin_left'
+    | 'below_center'
+    | 'player_footer';
+  progressMode: 'none' | 'inner_bottom' | 'outer_below' | 'player_footer';
+}
+
+const YOUTUBE_VARIANTS: YouTubeVariantSpec[] = [
+  {
+    id: 'wide_cinema',
+    top: '4.5%',
+    left: '7%',
+    width: '86%',
+    height: '70%',
+    radius: 16,
+    border: '1px solid rgba(255, 255, 255, 0.14)',
+    boxShadow: '0 36px 96px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.14)',
+    ambientStyle: (frame, dur) => {
+      const drift = interpolate(frame, [0, dur], [0, 6], { extrapolateRight: 'clamp' });
+      return {
+        opacity: 0.74,
+        filter: 'blur(94px) saturate(2.35) contrast(1.34) brightness(0.82)',
+        transform: `scale(2.3) rotate(${10 + drift}deg)`,
+      };
+    },
+    scrim: () => ({
+      background:
+        'radial-gradient(ellipse at 50% 42%, rgba(6, 7, 12, 0.42) 0%, rgba(5, 6, 10, 0.80) 66%, #040508 100%)',
+    }),
+    motionType: 'zoom',
+    sourcePos: 'inner_bottom_right',
+    progressMode: 'inner_bottom',
+  },
+  {
+    id: 'studio_showcase',
+    top: '5.5%',
+    left: '13.5%',
+    width: '73%',
+    height: '70%',
+    radius: 20,
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+    boxShadow: '0 32px 88px rgba(0, 0, 0, 0.88), inset 0 1px 0 rgba(255, 255, 255, 0.22)',
+    ambientStyle: (frame, dur) => {
+      const drift = interpolate(frame, [0, dur], [0, 8], { extrapolateRight: 'clamp' });
+      return {
+        opacity: 0.76,
+        filter: 'blur(98px) saturate(2.45) contrast(1.36) brightness(0.80)',
+        transform: `scaleX(-2.35) scaleY(2.35) rotate(${-16 - drift}deg)`,
+      };
+    },
+    scrim: () => ({
+      background:
+        'radial-gradient(circle at 26% 24%, rgba(6, 10, 18, 0.40) 0%, rgba(5, 7, 13, 0.78) 58%, rgba(4, 5, 9, 0.93) 100%)',
+    }),
+    motionType: 'rise',
+    sourcePos: 'inner_top_left',
+    progressMode: 'none',
+  },
+  {
+    id: 'left_offset',
+    top: '6%',
+    left: '5.5%',
+    width: '67%',
+    height: '68%',
+    radius: 18,
+    border: '1px solid rgba(255, 255, 255, 0.15)',
+    boxShadow: '0 28px 80px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.15)',
+    ambientStyle: (frame, dur) => {
+      const drift = interpolate(frame, [0, dur], [0, 7], { extrapolateRight: 'clamp' });
+      return {
+        opacity: 0.72,
+        filter: 'blur(102px) saturate(2.3) contrast(1.34) brightness(0.80)',
+        transform: `scale(2.4) translate(${6 - drift * 0.4}%, ${-4 + drift * 0.3}%) rotate(${22 + drift}deg)`,
+      };
+    },
+    scrim: () => ({
+      background:
+        'radial-gradient(circle at 78% 50%, rgba(7, 9, 13, 0.44) 0%, rgba(6, 8, 12, 0.78) 56%, rgba(4, 5, 8, 0.94) 100%)',
+    }),
+    hasFineGrid: true,
+    motionType: 'slideLeft',
+    sourcePos: 'margin_right',
+    progressMode: 'none',
+  },
+  {
+    id: 'right_offset',
+    top: '6%',
+    left: '27.5%',
+    width: '67%',
+    height: '67%',
+    radius: 18,
+    border: '1px solid rgba(255, 255, 255, 0.15)',
+    boxShadow: '0 28px 80px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.15)',
+    ambientStyle: (frame, dur) => {
+      const drift = interpolate(frame, [0, dur], [0, 7], { extrapolateRight: 'clamp' });
+      return {
+        opacity: 0.72,
+        filter: 'blur(98px) saturate(2.35) contrast(1.34) brightness(0.80)',
+        transform: `scale(2.35) translate(${-5 + drift * 0.4}%, 3%) rotate(${-24 - drift}deg)`,
+      };
+    },
+    scrim: () => ({
+      background:
+        'radial-gradient(circle at 24% 46%, rgba(7, 7, 11, 0.46) 0%, rgba(6, 6, 10, 0.80) 58%, #040508 100%)',
+    }),
+    motionType: 'slideRight',
+    sourcePos: 'margin_left',
+    progressMode: 'outer_below',
+  },
+  {
+    id: 'compact_gallery',
+    top: '7%',
+    left: '20.5%',
+    width: '59%',
+    height: '61%',
+    radius: 20,
+    border: '1px solid rgba(255, 255, 255, 0.16)',
+    boxShadow: '0 28px 76px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.2)',
+    ambientStyle: (frame, dur) => {
+      const drift = interpolate(frame, [0, dur], [0, 5], { extrapolateRight: 'clamp' });
+      return {
+        opacity: 0.72,
+        filter: 'blur(108px) saturate(2.4) contrast(1.34) brightness(0.80)',
+        transform: `scale(2.45) scaleY(-1) rotate(${14 - drift}deg)`,
+      };
+    },
+    scrim: () => ({
+      background:
+        'linear-gradient(180deg, rgba(6, 8, 14, 0.78) 0%, rgba(8, 12, 20, 0.48) 50%, rgba(4, 5, 9, 0.92) 100%)',
+    }),
+    hasFloorGlow: true,
+    motionType: 'rise',
+    sourcePos: 'below_center',
+    progressMode: 'none',
+  },
+  {
+    id: 'perspective_stage',
+    top: '6%',
+    left: '15%',
+    width: '70%',
+    height: '68%',
+    radius: 22,
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+    boxShadow: '0 36px 96px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.18)',
+    ambientStyle: (frame, dur) => {
+      const drift = interpolate(frame, [0, dur], [0, 9], { extrapolateRight: 'clamp' });
+      return {
+        opacity: 0.75,
+        filter: 'blur(96px) saturate(2.45) contrast(1.36) brightness(0.82)',
+        transform: `scale(2.35) rotate(${172 + drift}deg)`,
+      };
+    },
+    scrim: () => ({
+      background:
+        'radial-gradient(circle at 50% 44%, rgba(6, 9, 14, 0.42) 0%, rgba(5, 8, 13, 0.80) 60%, #040508 100%)',
+    }),
+    motionType: 'tiltPos',
+    sourcePos: 'inner_bottom_left',
+    progressMode: 'inner_bottom',
+  },
+  {
+    id: 'cinema_player',
+    top: '4.8%',
+    left: '12%',
+    width: '76%',
+    height: '71%',
+    radius: 18,
+    border: '1px solid rgba(255, 255, 255, 0.16)',
+    boxShadow: '0 34px 90px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.14)',
+    ambientStyle: (frame, dur) => {
+      const drift = interpolate(frame, [0, dur], [0, 6], { extrapolateRight: 'clamp' });
+      return {
+        opacity: 0.74,
+        filter: 'blur(94px) saturate(2.35) contrast(1.34) brightness(0.82)',
+        transform: `scaleX(-2.35) scaleY(2.35) rotate(${-164 + drift}deg)`,
+      };
+    },
+    scrim: () => ({
+      background:
+        'radial-gradient(ellipse at 50% 45%, rgba(7, 7, 12, 0.42) 0%, rgba(6, 6, 10, 0.78) 62%, #040407 100%)',
+    }),
+    motionType: 'zoom',
+    sourcePos: 'player_footer',
+    progressMode: 'player_footer',
+  },
+  {
+    id: 'ambient_glass_tilt',
+    top: '5.5%',
+    left: '16%',
+    width: '68%',
+    height: '69%',
+    radius: 22,
+    border: '1px solid rgba(255, 255, 255, 0.17)',
+    boxShadow: '0 34px 88px rgba(0, 0, 0, 0.88), inset 0 1px 0 rgba(255, 255, 255, 0.18)',
+    ambientStyle: (frame, dur) => {
+      const drift = interpolate(frame, [0, dur], [0, 10], { extrapolateRight: 'clamp' });
+      return {
+        opacity: 0.76,
+        filter: 'blur(98px) saturate(2.5) contrast(1.36) brightness(0.82)',
+        transform: `scale(2.4) rotate(${32 - drift}deg)`,
+      };
+    },
+    scrim: () => ({
+      background:
+        'radial-gradient(circle at 52% 45%, rgba(6, 7, 11, 0.42) 0%, rgba(5, 6, 10, 0.78) 62%, #040508 100%)',
+    }),
+    motionType: 'tiltNeg',
+    sourcePos: 'inner_top_right',
+    progressMode: 'none',
+  },
+];
+
+const formatClipClock = (seconds: number): string => {
+  const s = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+};
+
+const pickYouTubeVariantIndex = (scene: any): number => {
+  const explicitId = String(scene.evidence_style || scene.visual?.evidence_style || '').trim();
+  if (explicitId) {
+    const byName = YOUTUBE_VARIANTS.findIndex((v) => v.id === explicitId);
+    if (byName >= 0) return byName;
+  }
+
+  const sceneIdStr = String(scene.scene_id || '');
+  const numMatch = sceneIdStr.match(/(\d+)/);
+  if (numMatch) {
+    const num = parseInt(numMatch[1], 10);
+    // Multiply by 5 (coprime to 8) so nearby scenes never repeat the same layout
+    return (num * 5) % YOUTUBE_VARIANTS.length;
+  }
+
+  const seedStr = `${scene.media_path || ''}|${scene.timing?.start_ms || 0}`;
+  let h = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    h = (h * 31 + seedStr.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h) % YOUTUBE_VARIANTS.length;
+};
+
 /**
  * YouTubeEvidenceScene
- * Frames quoted third-party YouTube clips inside an attributed 16:9 evidence monitor
- * over a dark editorial grid backdrop, keeping bottom space clear for captions.
+ * Frames third-party YouTube clips across rotating luxury documentary presentations
+ * (varied sizes, live abstract video color backdrops, optional slim player scrubber,
+ * and plain Source: @handle tags) while keeping the bottom subtitle zone unobstructed.
  */
-export const YouTubeEvidenceScene = ({ scene, duration, isEven }: { scene: any; duration: number; isEven: boolean }) => {
+export const YouTubeEvidenceScene = ({
+  scene,
+  duration,
+  isEven,
+  variantOverride,
+}: {
+  scene: any;
+  duration: number;
+  isEven: boolean;
+  variantOverride?: number;
+}) => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
   const safeDuration = Math.max(1, duration || 30);
-  const enterOpacity = interpolate(frame, [0, 10], [0, 1], { extrapolateRight: 'clamp' });
-  const enterScale = interpolate(frame, [0, 12], [0.97, 1], { extrapolateRight: 'clamp' });
   const accentColor = scene.chapter_payload?.accentColor || scene.visual?.accentColor || '#D4AF37';
+  const spec =
+    typeof variantOverride === 'number'
+      ? YOUTUBE_VARIANTS[Math.abs(variantOverride) % YOUTUBE_VARIANTS.length]
+      : YOUTUBE_VARIANTS[pickYouTubeVariantIndex(scene)];
+
+  const progressRatio = Math.min(1, Math.max(0, frame / Math.max(1, safeDuration - 1)));
+  const enterOpacity = interpolate(frame, [0, 10], [0, 1], { extrapolateRight: 'clamp' });
 
   const rawChannel = String(
     scene.youtube_metadata?.channel_name ||
-    scene.visual?.youtube_channel_name ||
-    ''
+      scene.visual?.youtube_channel_name ||
+      ''
   ).trim();
   const formattedHandle = rawChannel
-    ? (rawChannel.startsWith('@') ? rawChannel : `@${rawChannel}`)
+    ? rawChannel.startsWith('@')
+      ? rawChannel
+      : `@${rawChannel}`
     : '';
-  const sourceLabel = formattedHandle
-    ? `SOURCE: ${formattedHandle} • Critical Review`
-    : 'SOURCE: External Reference • Critical Review';
+  const sourceText = formattedHandle ? `Source: ${formattedHandle}` : 'Source: Reference Clip';
+
+  let cardTransform = 'none';
+  if (spec.motionType === 'zoom') {
+    const s = interpolate(frame, [0, 14], [0.97, 1], { extrapolateRight: 'clamp' });
+    cardTransform = `scale(${s})`;
+  } else if (spec.motionType === 'slideLeft') {
+    const x = interpolate(frame, [0, 14], [-22, 0], { extrapolateRight: 'clamp' });
+    cardTransform = `translateX(${x}px)`;
+  } else if (spec.motionType === 'slideRight') {
+    const x = interpolate(frame, [0, 14], [22, 0], { extrapolateRight: 'clamp' });
+    cardTransform = `translateX(${x}px)`;
+  } else if (spec.motionType === 'rise') {
+    const y = interpolate(frame, [0, 14], [18, 0], { extrapolateRight: 'clamp' });
+    cardTransform = `translateY(${y}px)`;
+  } else if (spec.motionType === 'tiltPos') {
+    const ry = interpolate(frame, [0, safeDuration], [3.6, 0.8], { extrapolateRight: 'clamp' });
+    const rx = interpolate(frame, [0, 18], [1.2, 0], { extrapolateRight: 'clamp' });
+    cardTransform = `perspective(1800px) rotateY(${ry}deg) rotateX(${rx}deg)`;
+  } else if (spec.motionType === 'tiltNeg') {
+    const ry = interpolate(frame, [0, safeDuration], [-3.4, -0.6], { extrapolateRight: 'clamp' });
+    cardTransform = `perspective(1800px) rotateY(${ry}deg)`;
+  }
+
+  const pillStyle: React.CSSProperties = {
+    position: 'absolute',
+    zIndex: 30,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '9px',
+    padding: '8px 18px',
+    borderRadius: '9999px',
+    backgroundColor: 'rgba(10, 12, 18, 0.78)',
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
+    border: '1px solid rgba(255, 255, 255, 0.16)',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
+    color: 'rgba(255, 255, 255, 0.92)',
+    fontFamily: '"Inter", "Roboto", sans-serif',
+    fontSize: '18px',
+    fontWeight: 500,
+    letterSpacing: '0.01em',
+    pointerEvents: 'none',
+  };
+
+  const dotEl = (
+    <span
+      style={{
+        width: '8px',
+        height: '8px',
+        borderRadius: '50%',
+        backgroundColor: accentColor,
+        flexShrink: 0,
+      }}
+    />
+  );
+
+  const curSec = frame / Math.max(1, fps);
+  const totSec = safeDuration / Math.max(1, fps);
 
   return (
-    <AbsoluteFill style={{ backgroundColor: '#07090D', overflow: 'hidden' }}>
+    <AbsoluteFill style={{ backgroundColor: '#05060A', overflow: 'hidden' }}>
       <AbsoluteFill
         style={{
-          background: `radial-gradient(circle at 22% 18%, ${accentColor}26 0%, transparent 52%), radial-gradient(circle at 82% 84%, rgba(56, 189, 248, 0.14) 0%, transparent 52%), #07090D`,
+          transformOrigin: 'center center',
+          pointerEvents: 'none',
+          ...spec.ambientStyle(frame, safeDuration),
         }}
-      />
-      <AbsoluteFill
-        style={{
-          opacity: 0.18,
-          backgroundImage:
-            'linear-gradient(to right, rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px)',
-          backgroundSize: '48px 48px',
-        }}
-      />
+      >
+        <RawClipSequence scene={scene} duration={safeDuration} isEven={isEven} useOrganicCamera={false} />
+      </AbsoluteFill>
+      <AbsoluteFill style={{ pointerEvents: 'none', ...spec.scrim(accentColor, frame, safeDuration) }} />
+
+      {spec.hasFineGrid && (
+        <AbsoluteFill
+          style={{
+            opacity: 0.14,
+            backgroundImage:
+              'linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.05) 1px, transparent 1px)',
+            backgroundSize: '56px 56px',
+            maskImage: 'radial-gradient(ellipse at 50% 45%, black 30%, transparent 85%)',
+            WebkitMaskImage: 'radial-gradient(ellipse at 50% 45%, black 30%, transparent 85%)',
+          }}
+        />
+      )}
+
+      {spec.hasFloorGlow && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '65%',
+            left: '26%',
+            width: '48%',
+            height: '12%',
+            borderRadius: '50%',
+            background: `radial-gradient(ellipse at center, ${accentColor}26 0%, transparent 72%)`,
+            filter: 'blur(24px)',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
 
       <div
         style={{
           position: 'absolute',
-          top: '5.4%',
-          left: '13%',
-          width: '74%',
-          height: '74%',
-          borderRadius: '18px',
+          top: spec.top,
+          left: spec.left,
+          width: spec.width,
+          height: spec.height,
+          borderRadius: `${spec.radius}px`,
           overflow: 'hidden',
-          border: '1px solid rgba(255, 255, 255, 0.18)',
-          boxShadow:
-            '0 32px 90px rgba(0, 0, 0, 0.88), 0 0 0 1px rgba(255, 255, 255, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.14)',
-          backgroundColor: '#0B0E15',
+          border: spec.border,
+          boxShadow: spec.boxShadow,
+          backgroundColor: '#0A0D14',
           opacity: enterOpacity,
-          transform: `scale(${enterScale})`,
+          transform: cardTransform,
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <DualClipBackground scene={scene} duration={safeDuration} isEven={isEven} />
+        <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
+          <DualClipBackground scene={scene} duration={safeDuration} isEven={isEven} />
 
+          {spec.sourcePos === 'inner_top_left' && (
+            <div style={{ ...pillStyle, top: '20px', left: '20px' }}>
+              {dotEl}
+              <span>{sourceText}</span>
+            </div>
+          )}
+
+          {spec.sourcePos === 'inner_top_right' && (
+            <div style={{ ...pillStyle, top: '20px', right: '20px' }}>
+              {dotEl}
+              <span>{sourceText}</span>
+            </div>
+          )}
+
+          {spec.sourcePos === 'inner_bottom_left' && (
+            <div
+              style={{
+                ...pillStyle,
+                bottom: spec.progressMode === 'inner_bottom' ? '22px' : '18px',
+                left: '20px',
+              }}
+            >
+              {dotEl}
+              <span>{sourceText}</span>
+            </div>
+          )}
+
+          {spec.sourcePos === 'inner_bottom_right' && (
+            <div
+              style={{
+                ...pillStyle,
+                bottom: spec.progressMode === 'inner_bottom' ? '22px' : '18px',
+                right: '20px',
+              }}
+            >
+              {dotEl}
+              <span>{sourceText}</span>
+            </div>
+          )}
+
+          {spec.progressMode === 'inner_bottom' && (
+            <div
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: '3px',
+                backgroundColor: 'rgba(255, 255, 255, 0.16)',
+                zIndex: 35,
+              }}
+            >
+              <div
+                style={{
+                  width: `${progressRatio * 100}%`,
+                  height: '100%',
+                  backgroundColor: accentColor,
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {spec.sourcePos === 'player_footer' && (
+          <div
+            style={{
+              position: 'relative',
+              height: '46px',
+              flexShrink: 0,
+              backgroundColor: 'rgba(11, 14, 21, 0.96)',
+              borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 22px',
+              fontFamily: '"Inter", "Roboto", sans-serif',
+            }}
+          >
+            <div
+              style={{
+                position: 'absolute',
+                top: '-2px',
+                left: 0,
+                right: 0,
+                height: '3px',
+                backgroundColor: 'rgba(255, 255, 255, 0.14)',
+              }}
+            >
+              <div
+                style={{
+                  width: `${progressRatio * 100}%`,
+                  height: '100%',
+                  backgroundColor: accentColor,
+                }}
+              />
+            </div>
+            <span style={{ color: 'rgba(255, 255, 255, 0.9)', fontSize: '17px', fontWeight: 500 }}>
+              {sourceText}
+            </span>
+            <span style={{ color: 'rgba(255, 255, 255, 0.56)', fontSize: '15px', fontWeight: 500 }}>
+              {formatClipClock(curSec)} / {formatClipClock(totSec)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {spec.progressMode === 'outer_below' && (
         <div
           style={{
             position: 'absolute',
-            top: '22px',
-            left: '22px',
-            zIndex: 30,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '10px',
-            padding: '10px 20px',
+            top: '74.4%',
+            left: spec.left,
+            width: spec.width,
+            height: '3px',
             borderRadius: '9999px',
-            backgroundColor: 'rgba(10, 12, 18, 0.82)',
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-            border: '1px solid rgba(255, 255, 255, 0.2)',
-            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
-            color: 'rgba(255, 255, 255, 0.94)',
+            overflow: 'hidden',
+            backgroundColor: 'rgba(255, 255, 255, 0.14)',
+            opacity: enterOpacity,
+          }}
+        >
+          <div
+            style={{
+              width: `${progressRatio * 100}%`,
+              height: '100%',
+              backgroundColor: accentColor,
+            }}
+          />
+        </div>
+      )}
+
+      {spec.sourcePos === 'margin_right' && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '68%',
+            left: '75.5%',
+            right: '4.5%',
+            opacity: enterOpacity,
             fontFamily: '"Inter", "Roboto", sans-serif',
-            fontSize: '18px',
-            fontWeight: 600,
+          }}
+        >
+          <div
+            style={{
+              width: '28px',
+              height: '2px',
+              backgroundColor: accentColor,
+              marginBottom: '12px',
+              opacity: 0.85,
+            }}
+          />
+          <div style={{ color: 'rgba(255, 255, 255, 0.88)', fontSize: '20px', fontWeight: 500, lineHeight: 1.35 }}>
+            {sourceText}
+          </div>
+        </div>
+      )}
+
+      {spec.sourcePos === 'margin_left' && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '67%',
+            left: '5.5%',
+            width: '19%',
+            opacity: enterOpacity,
+            fontFamily: '"Inter", "Roboto", sans-serif',
+          }}
+        >
+          <div
+            style={{
+              width: '28px',
+              height: '2px',
+              backgroundColor: accentColor,
+              marginBottom: '12px',
+              opacity: 0.85,
+            }}
+          />
+          <div style={{ color: 'rgba(255, 255, 255, 0.88)', fontSize: '20px', fontWeight: 500, lineHeight: 1.35 }}>
+            {sourceText}
+          </div>
+        </div>
+      )}
+
+      {spec.sourcePos === 'below_center' && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '70.5%',
+            left: 0,
+            right: 0,
+            textAlign: 'center',
+            opacity: enterOpacity,
+            color: 'rgba(255, 255, 255, 0.84)',
+            fontFamily: '"Inter", "Roboto", sans-serif',
+            fontSize: '19px',
+            fontWeight: 500,
             letterSpacing: '0.02em',
             pointerEvents: 'none',
           }}
         >
-          <span
-            style={{
-              width: '10px',
-              height: '10px',
-              borderRadius: '50%',
-              backgroundColor: '#F59E0B',
-              flexShrink: 0,
-            }}
-          />
-          <span>{sourceLabel}</span>
+          {sourceText}
         </div>
-      </div>
+      )}
 
-      <AbsoluteFill style={{ pointerEvents: 'none', mixBlendMode: 'screen', opacity: 0.22 }}>
+      <AbsoluteFill style={{ pointerEvents: 'none', mixBlendMode: 'screen', opacity: 0.14 }}>
         <FilmGrain />
       </AbsoluteFill>
     </AbsoluteFill>
